@@ -371,6 +371,13 @@ global.Collada = {
 		
 	},
 
+	camera_translate_table: {
+		xfov: "fov",
+		aspect_ratio: "aspect",
+		znear: "near",
+		zfar: "far"
+	},
+
 	//used when id have spaces (regular selector do not support spaces)
 	querySelectorAndId: function(root, selector, id)
 	{
@@ -521,12 +528,29 @@ global.Collada = {
 		//pack
 		var children = [];
 		var xml = xmlnode.querySelector("technique_common");
-		if(xml)
+		if(xml) //grab all internal stuff
 			for(var i = 0; i < xml.childNodes.length; i++ )
 				if( xml.childNodes.item(i).nodeType == 1 ) //tag
 					children.push( xml.childNodes.item(i) );
 
-		
+		//
+		for(var i = 0; i < children.length; i++)
+		{
+			var tag = children[i];
+			parse_params(camera, tag);
+		}
+
+		function parse_params(camera, xml)
+		{
+			for(var i = 0; i < xml.childNodes.length; i++)
+			{
+				var child = xml.childNodes.item(i);
+				if( !child || child.nodeType != 1 ) //tag
+					continue;
+				var translated = Collada.camera_translate_table[ child.localName ] || child.localName;
+				camera[ translated ] = parseFloat( child.textContent );
+			}
+		}
 
 		node.camera = camera;
 	},

@@ -1,4 +1,6 @@
 var start_time = 0;
+var counter_elem = null;
+var timer = null;
 
 var log = function(msg, root)
 {
@@ -20,6 +22,8 @@ function showNodeInfo( node, root )
 		info = " Mesh: <span class='id2'>" + node.mesh + "</span>";
 	if(node.light)
 		info += " Light: " + node.light.type;
+	if(node.camera)
+		info += " Camera: FOV " + node.camera.fov.toFixed(2);
 	if(node.material)
 		info += " Material: <span class='id2'>" + node.material + "</span>";
 
@@ -54,16 +58,19 @@ function showSceneInfo(scene)
 
 		log("<li><span class='id2'>" + i + "</span>: <span class='type'>" + res.object_type + "</span> " + info + "</li>");
 	}
+
+	log("Drag a new file");
 }
 
 function init()
 {
 	Collada.init({ forceParser:true,  dataPath: "../demo/", workerPath: "../src/", libsPath: "../external/" });
-	log("Drag any file to the website to import it");
-	log("Loading DAE file...");
-	start_time = Date.now();
-	Collada.load("teapots.DAE", showSceneInfo );
+	var elem = log("Drag any file to the website to import it, or <button>click here</button> to test with a demo one");
 
+	elem.querySelector("button").addEventListener("click", function() {
+		onStartParsing();
+		Collada.load("teapots.DAE", onParsed );
+	});
 
 	//droping files 
 	var container = document.body;
@@ -76,11 +83,8 @@ function init()
 		var filename = file.name;
 		var ext = filename.substr(-3).toLowerCase();
 
-		document.body.innerHTML = "";
 		var elem = log("Filename: <strong>" + filename + "</strong>  Size: " + (file.size / 1024).toFixed(2) + " KBs");
-		start_time = Date.now();
-		var elem = log("Parsing...");
-		var timer = setInterval( function() { elem.innerHTML = "Parsing... " + ((Date.now() - start_time) * 0.001).toFixed(2) + " seconds"; }, 1000/60 );
+		onStartParsing();
 
 		//prepare reader
 		var reader = new FileReader();
@@ -98,13 +102,6 @@ function init()
 			}
 		};
 
-		function onParsed(scene)
-		{
-			clearInterval(timer);
-			scene.filename = filename;
-			showSceneInfo(scene);
-		}
-
 		//read data
 		var type = file.type.split("/")[0];
 		reader.readAsText(file);
@@ -113,6 +110,20 @@ function init()
 	};
 }
 
+function onStartParsing()
+{
+	document.body.innerHTML = "";
+	start_time = Date.now();
+	counter_elem = log("Loading and Parsing...");
+	timer = setInterval( function() { counter_elem.innerHTML = "Loading and Parsing... " + ((Date.now() - start_time) * 0.001).toFixed(2) + " seconds"; }, 1000/60 );
+}
+
+function onParsed(scene)
+{
+	document.body.innerHTML = "";
+	clearInterval(timer);
+	showSceneInfo(scene);
+}
 
 
 init();
