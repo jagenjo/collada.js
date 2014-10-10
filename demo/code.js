@@ -92,7 +92,7 @@ function init()
 			//console.log(event.target);
 			var data = event.target.result;
 
-			if(0)
+			if(0) //switch between mainthread and worker
 			{
 				onParsed( Collada.parse( data ) );
 			}

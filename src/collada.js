@@ -6,6 +6,7 @@ window = this;
 (function(global){
 
 var isWorker = window.document === undefined;
+var DEG2RAD = Math.PI * 2 / 360;
 
 //global temporal variables
 var temp_mat4 = null;
@@ -298,7 +299,7 @@ global.Collada = {
 				var xmlmaterial = xmlchild.querySelector("instance_material");
 				if(xmlmaterial)
 				{
-					var matname = xmlmaterial.getAttribute("symbol").toString();
+					var matname = xmlmaterial.getAttribute("target").toString().substr(1);
 					//matname = matname.replace(/ /g,"_"); //names cannot have spaces
 					if(scene.resources[matname])
 						node.material = matname;
@@ -358,11 +359,13 @@ global.Collada = {
 
 	//I want to change some names
 	material_translate_table: {
+		/*
 		transparency: "opacity",
 		reflectivity: "reflection_factor",
 		specular: "specular_factor",
 		shininess: "specular_gloss",
 		emission: "emissive",
+		*/
 		diffuse: "color"
 	},
 
@@ -384,7 +387,11 @@ global.Collada = {
 		var nodes = root.querySelectorAll(selector);
 		for(var i = 0; i < nodes.length; i++)
 		{
-			if( nodes.item(i).getAttribute("id") == id )
+			var attr_id = nodes.item(i).getAttribute("id");
+			if( !attr_id ) 
+				continue;
+			attr_id = attr_id.toString();
+			if(attr_id == id )
 				return nodes.item(i);
 		}
 		return null;
@@ -408,14 +415,48 @@ global.Collada = {
 
 		//get common
 		var xmltechnique = xmleffects.querySelector("technique");
-		if(!xmltechnique) return null;
+		if(!xmltechnique) 
+			return null;
 
 		var material = {};
 
 		var xmlphong = xmltechnique.querySelector("phong");
-		if(!xmlphong) return null;
+		if(!xmlphong) 
+			xmlphong = xmltechnique.querySelector("blinn");
+		if(!xmlphong) 
+			return null;
+
+		//for every tag of properties
+		for(var i = 0; i < xmlphong.childNodes.length; ++i)
+		{
+			var xmlparam = xmlphong.childNodes.item(i);
+
+			//translate name
+			var param_name = xmlparam.localName.toString();
+			if(this.material_translate_table[param_name])
+				param_name = this.material_translate_table[param_name];
+
+			//value
+			var xmlparam_value = xmlparam.childNodes.item(0);
+			if(!xmlparam_value)
+				continue;
+
+			if(xmlparam_value.localName.toString() == "color")
+			{
+				material[ param_name ] = this.readContentAsFloats( xmlparam_value ).subarray(0,3);
+				continue;
+			}
+			else if(xmlparam_value.localName.toString() == "float")
+			{
+				material[ param_name ] = this.readContentAsFloats( xmlparam_value )[0];
+				continue;
+			}
+
+		}
+
 
 		//colors
+		/*
 		var xmlcolors = xmlphong.querySelectorAll("color");
 		for(var i = 0; i < xmlcolors.length; ++i)
 		{
@@ -440,6 +481,7 @@ global.Collada = {
 			if(param == "opacity")
 				material[param] = 1 - material[param]; //reverse 
 		}
+		*/
 
 		material.object_type = "Material";
 		return material;
