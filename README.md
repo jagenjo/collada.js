@@ -7,6 +7,7 @@ collada.js is a parser of collada format (DAE) in javascript. It parses the comm
  * geometry (vertices, normals, texture coords, skinning weights and matrix index, morph targets)
  * scene structure (children)
  * basic material info
+ * animation (only transformation animation)
 
 Returns an object with all the info ready to use. The data arrays are in typed-arrays.
 
