@@ -36,6 +36,7 @@ global.Collada = {
 	libsPath: "./",
 	workerPath: "./",
 	no_flip: true,
+	use_transferables: true, //for workers
 
 	init: function (config)
 	{
@@ -80,6 +81,7 @@ global.Collada = {
 
 	_xmlroot: null,
 	_nodes_by_id: null,
+	_transferables: null,
 
 	safeString: function (str) { 
 		if(!str)
@@ -96,8 +98,9 @@ global.Collada = {
 
 		var xmlparser = null;
 		var root = null;
+		this._transferables = [];
 
-		if(global["DOMParser"])
+		if(global["DOMParser"] && !this.config.forceParser )
 		{
 			xmlparser = new DOMParser();
 			root = xmlparser.parseFromString(data,"text/xml");
@@ -107,53 +110,88 @@ global.Collada = {
 			//use tinyxmlparser
 			xmlparser = new DOMImplementation();
 			root = xmlparser.loadXML(data);
-			
-			//these methods are missing so here is a lousy implementation
-			DOMDocument.prototype.querySelector = DOMElement.prototype.querySelector = function(selector)
+
+			if(!this.extra_functions)
 			{
-				var tags = selector.split(" ");
-				var current_element = this;
-
-				while(tags.length)
+				this.extra_functions = true;
+				//these methods are missing so here is a lousy implementation
+				DOMDocument.prototype.querySelector = DOMElement.prototype.querySelector = function(selector)
 				{
-					var current = tags.shift();
-					var tokens = current.split("#");
-					var tagname = tokens[0];
-					var id = tokens[1];
-					var elements = current_element.getElementsByTagName(tagname);
-					if(tokens.length==1)
-					{
-						if(tags.length == 0)
-							return elements.item(0);
-						current_element = elements.item(0);
-						continue;
-					}
+					var tags = selector.split(" ");
+					var current_element = this;
 
-					//has id? check for all to see if one matches the id
-					for(var i = 0; i < elements.length; i++)
-						if( elements.item(i).getAttribute("id") == id)
+					while(tags.length)
+					{
+						var current = tags.shift();
+						var tokens = current.split("#");
+						var tagname = tokens[0];
+						var id = tokens[1];
+						var elements = tagname ? current_element.getElementsByTagName(tagname) : current_element.childNodes;
+						if(!id) //no id filter
 						{
 							if(tags.length == 0)
-								return elements.item(i);
-							current_element = elements.item(i);
-							break;
+								return elements.item(0);
+							current_element = elements.item(0);
+							continue;
 						}
+
+						//has id? check for all to see if one matches the id
+						for(var i = 0; i < elements.length; i++)
+							if( elements.item(i).getAttribute("id") == id)
+							{
+								if(tags.length == 0)
+									return elements.item(i);
+								current_element = elements.item(i);
+								break;
+							}
+					}
+					return null;
 				}
-				return null;
-			}
 
-			DOMElement.prototype.querySelectorAll = function(v)
-			{
-				return this.getElementsByTagName(v);
-			}
+				DOMDocument.prototype.querySelectorAll = DOMElement.prototype.querySelectorAll = function( selector )
+				{
+					var tags = selector.split(" ");
+					if(tags.length == 1)
+						return this.getElementsByTagName( selector );
 
-			Object.defineProperty( DOMElement.prototype, "textContent", { 
-				get: function() { 
-					var nodes = this.getChildNodes();
-					return nodes.item(0).toString(); 
-				},
-				set: function() {} 
-			});
+					var current_element = this;
+					var result = [];
+
+					inner(this, tags);
+
+					function inner(root, tags )
+					{
+						if(!tags)
+							return;
+
+						var current = tags.shift();
+						var elements = root.getElementsByTagName( current );
+						if(tags.length == 0)
+						{
+							for(var i = 0; i < elements.length; i++)
+								result.push( elements.item(i) );
+							return;
+						}
+
+						for(var i = 0; i < elements.length; i++)
+							inner( elements.item(i), tags.concat() );
+					}
+
+					var list = new DOMNodeList(this.documentElement);
+					list._nodes = result;
+					list.length = result.length;
+
+					return list;
+				}
+
+				Object.defineProperty( DOMElement.prototype, "textContent", { 
+					get: function() { 
+						var nodes = this.getChildNodes();
+						return nodes.item(0).toString(); 
+					},
+					set: function() {} 
+				});
+			}
 		}
 		this._xmlroot = root;
 		//var xmlvisual_scene = root.querySelector("visual_scene");
@@ -257,29 +295,23 @@ global.Collada = {
 				node.mesh = url.toString();
 
 				//binded material
-				try 
+				var xmlmaterial = xmlchild.querySelector("instance_material");
+				if(xmlmaterial)
 				{
-					var xmlmaterial = xmlchild.querySelector("instance_material");
-					if(xmlmaterial)
+					var matname = xmlmaterial.getAttribute("symbol").toString();
+					//matname = matname.replace(/ /g,"_"); //names cannot have spaces
+					if(scene.resources[matname])
+						node.material = matname;
+					else
 					{
-						var matname = xmlmaterial.getAttribute("symbol");
-						if(scene.resources[matname])
-							node.material = matname;
-						else
+						var material = this.readMaterial(matname);
+						if(material)
 						{
-							var material = this.readMaterial(matname);
-							if(material)
-							{
-								material.id = matname;
-								scene.resources[matname] = material;
-							}
-							node.material = matname;
+							material.id = matname; 
+							scene.resources[ material.id ] = material;
 						}
+						node.material = matname;
 					}
-				}
-				catch(err)
-				{
-					console.error("Error parsing material, check that materials doesnt have space in their names");
 				}
 			}
 
@@ -308,7 +340,14 @@ global.Collada = {
 			if(xmlchild.localName == "instance_light")
 			{
 				var url = xmlchild.getAttribute("url");
-				this.readLight(node, url, flip);
+				this.readLight(node, url);
+			}
+
+			//camera
+			if(xmlchild.localName == "instance_camera")
+			{
+				var url = xmlchild.getAttribute("url");
+				this.readCamera(node, url);
 			}
 
 			//other possible tags?
@@ -317,7 +356,8 @@ global.Collada = {
 		return node;
 	},
 
-	translate_table: {
+	//I want to change some names
+	material_translate_table: {
 		transparency: "opacity",
 		reflectivity: "reflection_factor",
 		specular: "specular_factor",
@@ -326,19 +366,37 @@ global.Collada = {
 		diffuse: "color"
 	},
 
+	light_translate_table: {
+		point: "omni",
+		
+	},
+
+	//used when id have spaces (regular selector do not support spaces)
+	querySelectorAndId: function(root, selector, id)
+	{
+		var nodes = root.querySelectorAll(selector);
+		for(var i = 0; i < nodes.length; i++)
+		{
+			if( nodes.item(i).getAttribute("id") == id )
+				return nodes.item(i);
+		}
+		return null;
+	},
+
 	readMaterial: function(url)
 	{
-		var xmlmaterial = this._xmlroot.querySelector("library_materials material#" + url);
-		if(!xmlmaterial) return null;
+		var xmlmaterial = this.querySelectorAndId( this._xmlroot, "library_materials material", url );
+		if(!xmlmaterial)
+			return null;
 
 		//get effect name
 		var xmleffect = xmlmaterial.querySelector("instance_effect");
 		if(!xmleffect) return null;
 
-		var effect_url = xmleffect.getAttribute("url");
+		var effect_url = xmleffect.getAttribute("url").substr(1);
 
 		//get effect
-		var xmleffects = this._xmlroot.querySelector("library_effects effect" + effect_url);
+		var xmleffects = this.querySelectorAndId( this._xmlroot, "library_effects effect", effect_url );
 		if(!xmleffects) return null;
 
 		//get common
@@ -354,10 +412,10 @@ global.Collada = {
 		var xmlcolors = xmlphong.querySelectorAll("color");
 		for(var i = 0; i < xmlcolors.length; ++i)
 		{
-			var xmlcolor = xmlcolors[i];
+			var xmlcolor = xmlcolors.item(i);
 			var param = xmlcolor.getAttribute("sid");
-			if(this.translate_table[param])
-				param = this.translate_table[param];
+			if(this.material_translate_table[param])
+				param = this.material_translate_table[param];
 			material[param] = this.readContentAsFloats( xmlcolor ).subarray(0,3);
 			if(param == "specular_factor")
 				material[param] = (material[param][0] + material[param][1] + material[param][2]) / 3; //specular factor
@@ -367,16 +425,16 @@ global.Collada = {
 		var xmlfloats = xmlphong.querySelectorAll("float");
 		for(var i = 0; i < xmlfloats.length; ++i)
 		{
-			var xmlfloat = xmlfloats[i];
+			var xmlfloat = xmlfloats.item(i);
 			var param = xmlfloat.getAttribute("sid");
-			if(this.translate_table[param])
-				param = this.translate_table[param];
+			if(this.material_translate_table[param])
+				param = this.material_translate_table[param];
 			material[param] = this.readContentAsFloats( xmlfloat )[0];
 			if(param == "opacity")
 				material[param] = 1 - material[param]; //reverse 
 		}
 
-		material.object_Type = "Material";
+		material.object_type = "Material";
 		return material;
 	},
 
@@ -391,7 +449,7 @@ global.Collada = {
 		var children = [];
 		var xml = xmlnode.querySelector("technique_common");
 		if(xml)
-			for(var i in xml.childNodes )
+			for(var i = 0; i < xml.childNodes.length; i++ )
 				if( xml.childNodes.item(i).nodeType == 1 ) //tag
 					children.push( xml.childNodes.item(i) );
 
@@ -411,14 +469,12 @@ global.Collada = {
 			switch( xml.localName )
 			{
 				case "point": 
-					light.type = LS.Light.OMNI; 
-					parse_params(light, xml);
-					break;
 				case "spot": 
-					light.type = LS.Light.SPOT; 
+					light.type = this.light_translate_table[ xml.localName ]; 
 					parse_params(light, xml);
 					break;
-				case "intensity": light.intensity = this.readContentAsFloats( xml )[0]; break;
+				case "intensity": light.intensity = this.readContentAsFloats( xml )[0]; 
+					break;
 			}
 		}
 
@@ -453,6 +509,26 @@ global.Collada = {
 		light.target = [0,-1,0];
 
 		node.light = light;
+	},
+
+	readCamera: function(node, url)
+	{
+		var camera = {};
+
+		var xmlnode = this._xmlroot.querySelector("library_cameras " + url);
+		if(!xmlnode) return null;
+
+		//pack
+		var children = [];
+		var xml = xmlnode.querySelector("technique_common");
+		if(xml)
+			for(var i = 0; i < xml.childNodes.length; i++ )
+				if( xml.childNodes.item(i).nodeType == 1 ) //tag
+					children.push( xml.childNodes.item(i) );
+
+		
+
+		node.camera = camera;
 	},
 
 	readTransform: function(xmlnode, level, flip)
@@ -760,6 +836,20 @@ global.Collada = {
 			}
 		}
 
+		//transferables for worker
+		if(isWorker && this.use_transferables)
+		{
+			for(var i in mesh)
+			{
+				var data = mesh[i];
+				if(data && data.buffer && data.length > 100)
+				{
+					this._transferables.push(data.buffer);
+				}
+			}
+		}
+
+
 		//extra info
 		mesh.filename = id;
 		mesh.object_type = "Mesh";
@@ -917,6 +1007,13 @@ global.Collada = {
 					//mat4.transpose(value, value);
 				}
 				anim_data.set(value, j * sample_size + 1); //set data
+			}
+
+			if(isWorker && this.use_transferables)
+			{
+				var data = anim_data;
+				if(data && data.buffer && data.length > 100)
+					this._transferables.push(data.buffer);
 			}
 
 			anim.data = anim_data;
@@ -1347,6 +1444,7 @@ if(!isWorker)
 		var worker = this.worker = new Worker( Collada.workerPath + "collada.js" );
 		worker.callback_ids = {};
 
+		//main thread receives a message from worker
 		worker.addEventListener('message', function(e) {
 			if(!e.data)
 				return;
@@ -1436,9 +1534,12 @@ if(isWorker)
 		var params = e.data.params;
 		var callback_id = e.data.callback_id;
 
+		//callback when the work is done
 		var callback = function(result){
-			self.postMessage({action:"result", callback_id: callback_id, result: result});
+			self.postMessage({action:"result", callback_id: callback_id, result: result}, Collada._transferables );
+			Collada._transferables = null;
 		}
+
 		var func = Collada[func_name];
 
 		if( func === "undefined")
