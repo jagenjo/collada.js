@@ -94,7 +94,7 @@ function init()
 
 			if(0) //switch between mainthread and worker
 			{
-				onParsed( Collada.parse( data ) );
+				onParsed( Collada.parse( data, null, filename ) );
 			}
 			else
 			{

@@ -93,6 +93,7 @@ global.Collada = {
 	parse: function(data, options, filename)
 	{
 		options = options || {};
+		filename = filename || "_dae_" + Date.now() + ".dae";
 
 		//console.log("Parsing collada");
 		var flip = true;
@@ -111,6 +112,10 @@ global.Collada = {
 			//use tinyxmlparser
 			xmlparser = new DOMImplementation();
 			root = xmlparser.loadXML(data);
+
+			var by_ids = root._nodes_by_id = {};
+			for(var i = 0, l = root.all.length; i < l; ++i)
+				by_ids[ root.all[i].id ] = root.all[i];
 
 			if(!this.extra_functions)
 			{
@@ -923,9 +928,15 @@ global.Collada = {
 		
 	},
 
-	//like querySelector but allows spaces in names...
+	//like querySelector but allows spaces in names because COLLADA allows space in names
 	findXMLNodeById: function(root, nodename, id)
 	{
+		//precomputed
+		var n = this._xmlroot._nodes_by_id[ id ];
+		if( n && n.localName == nodename)
+			return n;
+
+		//recursive: slow
 		var childs = root.childNodes;
 		for(var i = 0; i < childs.length; ++i)
 		{

@@ -31,7 +31,8 @@ Include the library and dependencies
 
 Fetch the file and parse it:
 ```js
-Collada.load( "myfile.dae", callback ); //callback receives one unic parameter with all the scene
+//callback receives one unic parameter with all the scene
+Collada.load( "myfile.dae", callback ); 
 ```
 
 Or if you already have the data and only want to parse it:
