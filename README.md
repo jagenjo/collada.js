@@ -47,9 +47,9 @@ Collada.init({ dataPath: "../demo/", workerPath: "../src/", libsPath: "../extern
 ```
 
 Where:
- * dataPath is the root node where to fetch the data when doing XMLHttpRequest
+ * dataPath is the folder(path) where to fetch data when using XMLHttpRequest inside the worker
  * workerPath the folder where the collada.js is located
- * libsPath the folder where the xml parsing libraries are located
+ * libsPath the folder where glmatrix and tinyxml libraries are located
 
 Then
 ```js
@@ -65,6 +65,6 @@ Collada.parseInWorker( data, callback );
 Feedback
 --------
 
-This has been tested with collada files exported from Cinema4D and 3DS Max, if you have one DAE that doesnt seem propertly supported, send it to me so I can see the differences.
+This has been tested with collada files exported from Cinema4D, Maya and 3DS Max, if you have one DAE that doesnt seem propertly supported, send it to me so I can see the differences.
 
 You can write any feedback to javi.agenjo@gmail.com
