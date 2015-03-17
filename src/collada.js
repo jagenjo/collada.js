@@ -38,6 +38,7 @@ global.Collada = {
 	workerPath: "./",
 	no_flip: true,
 	use_transferables: true, //for workers
+	onerror: null,
 
 	init: function (config)
 	{
@@ -48,7 +49,14 @@ global.Collada = {
 
 		if( isWorker )
 		{
-			importScripts( this.libsPath + "gl-matrix-min.js", this.libsPath + "tinyxmlsax.js", this.libsPath + "tinyxmldom.js", this.libsPath + "tinyxmlw3cdom.js" );
+			try
+			{
+				importScripts( this.libsPath + "gl-matrix-min.js", this.libsPath + "tinyxml.js" );
+			}
+			catch (err)
+			{
+				Collada.throwException( Collada.LIBMISSING_ERROR );
+			}
 		}
 
 		//init glMatrix
@@ -90,6 +98,18 @@ global.Collada = {
 		return str.replace(/ /g,"_"); 
 	},
 
+	LIBMISSING_ERROR: "Libraries loading error, when using workers remember to pass the URL to the tinyxml.js in the options.libsPath",
+	NOXMLPARSER_ERROR: "TinyXML not found, when using workers remember to pass the URL to the tinyxml.js in the options.libsPath (Workers do not allow to access the native XML DOMParser)",
+	throwException: function(msg)
+	{
+		if(isWorker)
+			self.postMessage({action:"exception", msg: msg});
+		else
+			if(Collada.onerror)
+				Collada.onerror(msg);
+		throw(msg);
+	},
+
 	parse: function(data, options, filename)
 	{
 		options = options || {};
@@ -109,8 +129,18 @@ global.Collada = {
 		}
 		else
 		{
+			if(!global["DOMImplementation"] )
+				return Collada.throwException( Collada.NOXMLPARSER_ERROR );
 			//use tinyxmlparser
-			xmlparser = new DOMImplementation();
+			try
+			{
+				xmlparser = new DOMImplementation();
+			}
+			catch (err)
+			{
+				return Collada.throwException( Collada.NOXMLPARSER_ERROR );
+			}
+
 			root = xmlparser.loadXML(data);
 
 			var by_ids = root._nodes_by_id = {};
@@ -1521,6 +1551,11 @@ if(!isWorker)
 		var worker = this.worker = new Worker( Collada.workerPath + "collada.js" );
 		worker.callback_ids = {};
 
+		worker.addEventListener('error', function(e){
+			if (Collada.onerror)
+				Collada.onerror(err);
+		});
+
 		//main thread receives a message from worker
 		worker.addEventListener('message', function(e) {
 			if(!e.data)
@@ -1531,6 +1566,11 @@ if(!isWorker)
 			switch(data.action)
 			{
 				case "log": console.log.apply( console, data.params ); break;
+				case "exception": 
+					console.error.apply( console, data.params ); 
+					if(Collada.onerror)
+						Collada.onerror(data.msg);
+					break;
 				case "error": console.error.apply( console, data.params ); break;
 				case "result": 
 					var callback = this.callback_ids[ data.callback_id ];
@@ -1619,7 +1659,7 @@ if(isWorker)
 
 		var func = Collada[func_name];
 
-		if( func === "undefined")
+		if( func === undefined)
 		{
 			console.error("function not found:", func_name);
 			callback(null);

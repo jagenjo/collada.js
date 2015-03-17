@@ -69,7 +69,7 @@ function init()
 
 	elem.querySelector("button").addEventListener("click", function() {
 		onStartParsing();
-		Collada.load("teapots.DAE", onParsed );
+		Collada.loadInWorker("teapots.DAE", onParsed );
 	});
 
 	//droping files 
@@ -91,6 +91,7 @@ function init()
 		reader.onload = function (event) {
 			//console.log(event.target);
 			var data = event.target.result;
+			Collada.onerror = onParsed;
 
 			if(0) //switch between mainthread and worker
 			{
@@ -122,7 +123,13 @@ function onParsed(scene)
 {
 	document.body.innerHTML = "";
 	clearInterval(timer);
-	showSceneInfo(scene);
+
+	if(!scene)
+		document.body.innerHTML = "Error, check console";
+	else if(typeof(scene) == "string")
+		document.body.innerHTML = "Error: " + scene;
+	else
+		showSceneInfo(scene);
 }
 
 
