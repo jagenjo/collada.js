@@ -24,8 +24,14 @@ function showNodeInfo( node, root )
 		info += " Light: " + node.light.type;
 	if(node.camera)
 		info += " Camera: FOV " + node.camera.fov.toFixed(2);
-	if(node.material)
-		info += " Material: <span class='id2'>" + node.material + "</span>";
+	if(node.materials)
+	{
+		info += " <br/>Materials: ";
+		for(var i in node.materials)
+			info += "<span class='id3'>" + node.materials[i] + "</span> ";
+	}
+	else if(node.material)
+		info += " Material: <span class='id3'>" + node.material + "</span>";
 
 
 	log("NODE: <span class='id'>" + (node.id || "") + "</span> " + info, e);
@@ -37,6 +43,12 @@ function showNodeInfo( node, root )
 	}
 }
 
+function getColorString( color )
+{
+	var c = color[0].toFixed(2) + "," + color[1].toFixed(2) + "," + color[2].toFixed(2);
+	return "<span style='background-color: rgb("+((255*color[0]).toFixed(0)) + "," + ((255*color[1]).toFixed(0)) + "," + ((255*color[2]).toFixed(0))+")'>"+c+"</span>"; 
+}
+
 function showSceneInfo(scene)
 {
 	scene.root.id = "root";
@@ -45,18 +57,25 @@ function showSceneInfo(scene)
 	console.log(scene);
 	log("<h2>SCENE</h2>");
 	showNodeInfo( scene.root );
-	log("<h2>RESOURCES</h2>");
-	for(var i in scene.resources )
+	log("<h2>MESHES</h2>");
+	for(var i in scene.meshes )
 	{
-		var res = scene.resources[i];
-		var info = "";
-		switch(res.object_type)
-		{
-			case "Material": info = "Color: " + res.color[0].toFixed(2) + "," + res.color[1].toFixed(2) + "," + res.color[2].toFixed(2); break;
-			case "Mesh": info = "Num. Vertices: " + res.vertices.length / 3; break;
-		}
-
+		var res = scene.meshes[i];
+		info = "Num. Vertices: " + res.vertices.length / 3;
 		log("<li><span class='id2'>" + i + "</span>: <span class='type'>" + res.object_type + "</span> " + info + "</li>");
+	}
+	log("<h2>Materials</h2>");
+	for(var i in scene.materials )
+	{
+		var mat = scene.materials[i];
+		log("<li><span class='id2'>" + i + "</span>: <span class='color'>" + (mat.diffuse ? "DIFFUSE: " + getColorString(mat.diffuse) : "NO COLOR") + "</span></li>");
+	}
+
+	log("<h2>Images</h2>");
+	for(var i in scene.images )
+	{
+		var image = scene.images[i];
+		log("<li><span class='id2'>" + i + "</span>: <span class='type'>" + image.filename + "</span></li>");
 	}
 
 	log("Drag a new file");
@@ -64,7 +83,7 @@ function showSceneInfo(scene)
 
 function init()
 {
-	Collada.init({ forceParser:true,  dataPath: "../demo/", workerPath: "../src/", libsPath: "../external/" });
+	Collada.init({ forceParser:false,  dataPath: "../demo/", workerPath: "../src/", libsPath: "../external/" });
 	var elem = log("Drag any file to the website to import it, or <button>click here</button> to test with a demo one");
 
 	elem.querySelector("button").addEventListener("click", function() {
@@ -93,7 +112,7 @@ function init()
 			var data = event.target.result;
 			Collada.onerror = onParsed;
 
-			if(0) //switch between mainthread and worker
+			if(1) //switch between mainthread and worker
 			{
 				onParsed( Collada.parse( data, null, filename ) );
 			}

@@ -1,11 +1,9 @@
 //collada.js 
 //This worker should offload the main thread from parsing big text files (DAE)
-//no litegl.js code should be here
-window = this;
 
 (function(global){
 
-var isWorker = window.document === undefined;
+var isWorker = global.document === undefined;
 var DEG2RAD = Math.PI * 2 / 360;
 
 //global temporal variables
@@ -39,6 +37,8 @@ global.Collada = {
 	no_flip: true,
 	use_transferables: true, //for workers
 	onerror: null,
+	verbose: false,
+	config: {},
 
 	init: function (config)
 	{
@@ -110,6 +110,18 @@ global.Collada = {
 		throw(msg);
 	},
 
+	getFilename: function(filename)
+	{
+		var pos = filename.lastIndexOf("\\");
+		if(pos != -1)
+			filename = filename.substr(pos+1);
+		//strip unix slashes
+		pos = filename.lastIndexOf("/");
+		if(pos != -1)
+			filename = filename.substr(pos+1);
+		return filename;
+	},
+
 	parse: function(data, options, filename)
 	{
 		options = options || {};
@@ -121,11 +133,16 @@ global.Collada = {
 		var xmlparser = null;
 		var root = null;
 		this._transferables = [];
+		
+		if(this.verbose)
+			console.log(" - XML parsing...");
 
 		if(global["DOMParser"] && !this.config.forceParser )
 		{
 			xmlparser = new DOMParser();
 			root = xmlparser.parseFromString(data,"text/xml");
+			if(this.verbose)
+				console.log(" - XML parsed");			
 		}
 		else
 		{
@@ -142,6 +159,8 @@ global.Collada = {
 			}
 
 			root = xmlparser.loadXML(data);
+			if(this.verbose)
+				console.log(" - XML parsed");
 
 			var by_ids = root._nodes_by_id = {};
 			for(var i = 0, l = root.all.length; i < l; ++i)
@@ -230,6 +249,12 @@ global.Collada = {
 			}
 		}
 		this._xmlroot = root;
+		var xmlcollada = root.querySelector("COLLADA");
+		if(xmlcollada)
+		{
+			this._current_DAE_version = xmlcollada.getAttribute("version");
+			console.log("DAE Version:" + this._current_DAE_version);
+		}
 		//var xmlvisual_scene = root.querySelector("visual_scene");
 		var xmlvisual_scene = root.getElementsByTagName("visual_scene").item(0);
 		if(!xmlvisual_scene)
@@ -239,11 +264,15 @@ global.Collada = {
 		this._nodes_by_id = {}; //clear
 		this.readAllNodeNames(xmlvisual_scene);
 
+		//Create a scene tree
 		var scene = { 
 			object_type:"SceneTree", 
 			light: null,
-			resources: {},
-			root:{ children:[] }
+			materials: {},
+			meshes: {},
+			resources: {}, //used to store animation tracks
+			root:{ children:[] },
+			external_files: {} //store info about external files mentioned in this 
 		};
 
 		//parse nodes tree
@@ -266,6 +295,9 @@ global.Collada = {
 			scene.resources[ animations_name ] = animations;
 			scene.root.animations = animations_name;
 		}
+
+		//read external files (images)
+		scene.images = this.readImages(root);
 
 		//console.log(scene);
 		return scene;
@@ -318,35 +350,46 @@ global.Collada = {
 			if(xmlchild.localName == "instance_geometry")
 			{
 				var url = xmlchild.getAttribute("url");
-				if(!scene.resources[ url ])
+				var mesh_id = url.toString().substr(1);
+				node.mesh = mesh_id;
+
+				if(!scene.meshes[ url ])
 				{
 					var mesh_data = this.readGeometry(url, flip);
 					if(mesh_data)
 					{
-						mesh_data.name = url;
-						scene.resources[url] = mesh_data;
+						mesh_data.name = mesh_id;
+						scene.meshes[ mesh_id ] = mesh_data;
 					}
 				}
 
-				node.mesh = url.toString();
-
 				//binded material
-				var xmlmaterial = xmlchild.querySelector("instance_material");
-				if(xmlmaterial)
+				var xmlmaterials = xmlchild.querySelectorAll("instance_material");
+				if(xmlmaterials)
 				{
-					var matname = xmlmaterial.getAttribute("target").toString().substr(1);
-					//matname = matname.replace(/ /g,"_"); //names cannot have spaces
-					if(scene.resources[matname])
-						node.material = matname;
-					else
+					for(var iMat = 0; iMat < xmlmaterials.length; ++iMat)
 					{
-						var material = this.readMaterial(matname);
-						if(material)
+						var xmlmaterial = xmlmaterials[iMat];
+
+						var matname = xmlmaterial.getAttribute("target").toString().substr(1);
+						//matname = matname.replace(/ /g,"_"); //names cannot have spaces
+						if(!scene.meshes[matname])
 						{
-							material.id = matname; 
-							scene.resources[ material.id ] = material;
+							var material = this.readMaterial(matname);
+							if(material)
+							{
+								material.id = matname; 
+								scene.materials[ material.id ] = material;
+							}
 						}
-						node.material = matname;
+						if(iMat == 0)
+							node.material = matname;
+						else
+						{
+							if(!node.materials)
+								node.materials = [];
+							node.materials.push(matname);
+						}
 					}
 				}
 			}
@@ -368,7 +411,7 @@ global.Collada = {
 
 					mesh.name = url.toString();
 					node.mesh = url.toString();
-					scene.resources[url] = mesh;
+					scene.meshes[url] = mesh;
 				}
 			}
 
@@ -392,7 +435,7 @@ global.Collada = {
 		return node;
 	},
 
-	//I want to change some names
+	//if you want to rename some material names
 	material_translate_table: {
 		/*
 		transparency: "opacity",
@@ -400,8 +443,8 @@ global.Collada = {
 		specular: "specular_factor",
 		shininess: "specular_gloss",
 		emission: "emissive",
-		*/
 		diffuse: "color"
+		*/
 	},
 
 	light_translate_table: {
@@ -429,6 +472,15 @@ global.Collada = {
 			if(attr_id == id )
 				return nodes.item(i);
 		}
+		return null;
+	},
+
+	getFirstChildElement: function(root)
+	{
+		var c = root.childNodes;
+		for(var i = 0; i < c.length; ++i)
+			if(c[i].localName)
+				return c[i];
 		return null;
 	},
 
@@ -466,13 +518,16 @@ global.Collada = {
 		{
 			var xmlparam = xmlphong.childNodes.item(i);
 
+			if(!xmlparam.localName) //text tag
+				continue;
+
 			//translate name
 			var param_name = xmlparam.localName.toString();
 			if(this.material_translate_table[param_name])
 				param_name = this.material_translate_table[param_name];
 
 			//value
-			var xmlparam_value = xmlparam.childNodes.item(0);
+			var xmlparam_value = this.getFirstChildElement( xmlparam );
 			if(!xmlparam_value)
 				continue;
 
@@ -486,37 +541,20 @@ global.Collada = {
 				material[ param_name ] = this.readContentAsFloats( xmlparam_value )[0];
 				continue;
 			}
+			else if(xmlparam_value.localName.toString() == "texture")
+			{
+				if(!material.textures)
+					material.textures = {};
+				var map_id = xmlparam_value.getAttribute("texture");
+				if(!map_id)
+					continue;
 
+				var map_info = { map_id: map_id };
+				var uvs = xmlparam_value.getAttribute("texcoord");
+				map_info.uvs = uvs;
+				material.textures[ param_name ] = map_info;
+			}
 		}
-
-
-		//colors
-		/*
-		var xmlcolors = xmlphong.querySelectorAll("color");
-		for(var i = 0; i < xmlcolors.length; ++i)
-		{
-			var xmlcolor = xmlcolors.item(i);
-			var param = xmlcolor.getAttribute("sid");
-			if(this.material_translate_table[param])
-				param = this.material_translate_table[param];
-			material[param] = this.readContentAsFloats( xmlcolor ).subarray(0,3);
-			if(param == "specular_factor")
-				material[param] = (material[param][0] + material[param][1] + material[param][2]) / 3; //specular factor
-		}
-
-		//factors
-		var xmlfloats = xmlphong.querySelectorAll("float");
-		for(var i = 0; i < xmlfloats.length; ++i)
-		{
-			var xmlfloat = xmlfloats.item(i);
-			var param = xmlfloat.getAttribute("sid");
-			if(this.material_translate_table[param])
-				param = this.material_translate_table[param];
-			material[param] = this.readContentAsFloats( xmlfloat )[0];
-			if(param == "opacity")
-				material[param] = 1 - material[param]; //reverse 
-		}
-		*/
 
 		material.object_type = "Material";
 		return material;
@@ -725,8 +763,13 @@ global.Collada = {
 
 	readGeometry: function(id, flip)
 	{
-		var xmlgeometry = this._xmlroot.querySelector("geometry" + id);
-		if(!xmlgeometry) return null;
+		//var xmlgeometry = this._xmlroot.querySelector("geometry" + id);
+		var xmlgeometry = this._xmlroot.getElementById(id.substr(1));
+		if(!xmlgeometry) 
+		{
+			console.warn("readGeometry: geometry not found: " + id);
+			return null;
+		}
 
 		var use_indices = false;
 		var xmlmesh = xmlgeometry.querySelector("mesh");
@@ -799,18 +842,19 @@ global.Collada = {
 		var vertex_remap = [];
 		var indicesArray = [];
 
-		//for every triangles set
+		//for every triangles set (warning, some times they are repeated...)
 		for(var tris = 0; tris < xmltriangles.length; tris++)
 		{
 			var xml_shape_root = xmltriangles.item(tris);
 
-			//for each buffer (input)
+			//for each buffer (input) build the structure info
 			var xmlinputs = xml_shape_root.querySelectorAll("input");
 			if(tris == 0) //first iteration, create buffers
 				for(var i = 0; i < xmlinputs.length; i++)
 				{
 					var xmlinput = xmlinputs.item(i);
-					if(!xmlinput.getAttribute) continue;
+					if(!xmlinput.getAttribute) 
+						continue;
 					var semantic = xmlinput.getAttribute("semantic").toUpperCase();
 					var stream_source = sources[ xmlinput.getAttribute("source").substr(1) ];
 					var offset = parseInt( xmlinput.getAttribute("offset") );
@@ -822,14 +866,16 @@ global.Collada = {
 				}
 			//assuming buffers are ordered by offset
 
+			//iterate data
 			var xmlps = xml_shape_root.querySelectorAll("p");
 			var num_data_vertex = buffers.length; //one value per input buffer
 
-			//for every polygon
+			//for every polygon (could be one with all the indices, could be several, depends on the program)
 			for(var i = 0; i < xmlps.length; i++)
 			{
 				var xmlp = xmlps.item(i);
-				if(!xmlp || !xmlp.textContent) break;
+				if(!xmlp || !xmlp.textContent) 
+					break;
 
 				var data = xmlp.textContent.trim().split(" ");
 
@@ -883,12 +929,13 @@ global.Collada = {
 				}//per vertex
 			}//per polygon
 
-			//groups.push(indicesArray.length);
+			groups.push(indicesArray.length);
 		}//per triangles group
 
 
 		var mesh = {
 			vertices: new Float32Array(buffers[0][1]),
+			groups: groups,
 			_remap: new Uint16Array(vertex_remap)
 		};
 
@@ -962,9 +1009,18 @@ global.Collada = {
 	findXMLNodeById: function(root, nodename, id)
 	{
 		//precomputed
-		var n = this._xmlroot._nodes_by_id[ id ];
-		if( n && n.localName == nodename)
-			return n;
+		if( this._xmlroot._nodes_by_id )
+		{
+			var n = this._xmlroot._nodes_by_id[ id ];
+			if( n && n.localName == nodename)
+				return n;
+		}
+		else //for the native parser
+		{
+			var n = this._xmlroot.getElementById( id );
+			if(n)
+				return n;
+		}
 
 		//recursive: slow
 		var childs = root.childNodes;
@@ -980,6 +1036,35 @@ global.Collada = {
 				return xmlnode;
 		}
 		return null;
+	},
+
+	readImages: function(root)
+	{
+		var xmlimages = root.querySelector("library_images");
+		if(!xmlimages)
+			return null;
+
+		var images = {};
+
+		var xmlimages_childs = xmlimages.childNodes;
+		for(var i = 0; i < xmlimages_childs.length; ++i)
+		{
+			var xmlimage = xmlimages_childs.item(i);
+			if(xmlimage.nodeType != 1 ) //no tag
+				continue;
+
+			var xmlinitfrom = xmlimage.querySelector("init_from");
+			if(!xmlinitfrom)
+				continue;
+			if(xmlinitfrom.textContent)
+			{
+				var filename = this.getFilename( xmlinitfrom.textContent );
+				var id = xmlimage.getAttribute("id");
+				images[id] = { filename: filename, map: id, name: xmlimage.getAttribute("name"), path: xmlinitfrom.textContent };
+			}
+		}
+
+		return images;
 	},
 
 	readAnimations: function(root, scene)
@@ -1380,7 +1465,7 @@ global.Collada = {
 		{
 			var id = "#" + targets[i];
 			var geometry = this.readGeometry( id, flip );
-			scene.resources[id] = geometry;
+			scene.meshes[id] = geometry;
 			morphs.push([id, weights[i]]);
 		}
 
@@ -1680,4 +1765,4 @@ if(isWorker)
 	}, false);
 }
 
-})( window || self );
+})( typeof(window) != "undefined" ? window : self );
