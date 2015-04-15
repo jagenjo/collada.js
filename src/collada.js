@@ -448,8 +448,7 @@ global.Collada = {
 	},
 
 	light_translate_table: {
-		point: "omni",
-		
+		point: "omni"		
 	},
 
 	camera_translate_table: {
