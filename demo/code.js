@@ -83,12 +83,13 @@ function showSceneInfo(scene)
 
 function init()
 {
-	Collada.init({ forceParser:false,  dataPath: "../demo/", workerPath: "../src/", libsPath: "../external/" });
+	Collada.init({ forceParser: false,  dataPath: "../demo/", workerPath: "../src/", libsPath: "../external/" });
 	var elem = log("Drag any file to the website to import it, or <button>click here</button> to test with a demo one");
 
 	elem.querySelector("button").addEventListener("click", function() {
 		onStartParsing();
 		Collada.loadInWorker("teapots.DAE", onParsed );
+		//Collada.load("teapots.DAE", onParsed ); //use this for worker
 	});
 
 	//droping files 

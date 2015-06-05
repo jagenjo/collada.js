@@ -20,6 +20,10 @@ if( isWorker )
 			var args = Array.prototype.slice.call(arguments, 0);
 			self.postMessage({action:"log", params: args});
 		},
+		warn: function(msg) { 
+			var args = Array.prototype.slice.call(arguments, 0);
+			self.postMessage({action:"warn", params: args});
+		},
 		error: function(msg) { 
 			var args = Array.prototype.slice.call(arguments, 0);
 			self.postMessage({action:"error", params: args});
@@ -38,7 +42,7 @@ global.Collada = {
 	use_transferables: true, //for workers
 	onerror: null,
 	verbose: false,
-	config: {},
+	config: { forceParser:false },
 
 	init: function (config)
 	{
@@ -128,7 +132,7 @@ global.Collada = {
 		filename = filename || "_dae_" + Date.now() + ".dae";
 
 		//console.log("Parsing collada");
-		var flip = true;
+		var flip = false;
 
 		var xmlparser = null;
 		var root = null;
@@ -144,7 +148,7 @@ global.Collada = {
 			if(this.verbose)
 				console.log(" - XML parsed");			
 		}
-		else
+		else //USING JS XML PARSER IMPLEMENTATION
 		{
 			if(!global["DOMImplementation"] )
 				return Collada.throwException( Collada.NOXMLPARSER_ERROR );
@@ -162,9 +166,15 @@ global.Collada = {
 			if(this.verbose)
 				console.log(" - XML parsed");
 
+			//for every node...
 			var by_ids = root._nodes_by_id = {};
 			for(var i = 0, l = root.all.length; i < l; ++i)
-				by_ids[ root.all[i].id ] = root.all[i];
+			{
+				var node = root.all[i];
+				by_ids[ node.id ] = node;
+				if(node.getAttribute("sid"))
+					by_ids[ node.getAttribute("sid") ] = node;
+			}
 
 			if(!this.extra_functions)
 			{
@@ -309,6 +319,12 @@ global.Collada = {
 		var node_id = this.safeString( xmlnode.getAttribute("id") );
 		if(node_id)
 			this._nodes_by_id[node_id] = true; //node found
+		//nodes seem to have to possible ids, id and sid, I guess one is unique, the other user-defined
+		var node_sid = this.safeString( xmlnode.getAttribute("sid") );
+		if(node_sid)
+			this._nodes_by_id[node_sid] = true; //node found
+
+
 		for( var i = 0; i < xmlnode.childNodes.length; i++ )
 		{
 			var xmlchild = xmlnode.childNodes.item(i);
@@ -323,11 +339,17 @@ global.Collada = {
 	readNode: function(xmlnode, scene, level, flip)
 	{
 		var node_id = this.safeString( xmlnode.getAttribute("id") );
-		if(!node_id)
+		var node_sid = this.safeString( xmlnode.getAttribute("sid") );
+
+		if(!node_id && !node_sid)
 			return null;
+
 		var node_type = xmlnode.getAttribute("type");
-		var node = { id: node_id, children:[], _depth: level };
-		this._nodes_by_id[node_id] = node;
+		var node = { id: node_sid || node_id, children:[], _depth: level };
+		var node_name = xmlnode.getAttribute("name");
+		if( node_name)
+			node.name = node_name;
+		this._nodes_by_id[ node.id ] = node;
 
 		//transform
 		node.model = this.readTransform(xmlnode, level, flip );
@@ -369,7 +391,12 @@ global.Collada = {
 				{
 					for(var iMat = 0; iMat < xmlmaterials.length; ++iMat)
 					{
-						var xmlmaterial = xmlmaterials[iMat];
+						var xmlmaterial = xmlmaterials.item(iMat);
+						if(!xmlmaterial)
+						{
+							console.warn("instance_material not found: " + i);
+							continue;
+						}
 
 						var matname = xmlmaterial.getAttribute("target").toString().substr(1);
 						//matname = matname.replace(/ /g,"_"); //names cannot have spaces
@@ -395,11 +422,17 @@ global.Collada = {
 			}
 
 
-			//skinned or morph targets
+			//skinning, morph targets or even multimaterial
 			if(xmlchild.localName == "instance_controller")
 			{
 				var url = xmlchild.getAttribute("url");
-				var mesh_data = this.readController(url, flip, scene );
+				var mesh_data = this.readController( url, flip, scene );
+
+				//binded materials
+				var xmlbindmaterial = xmlchild.querySelector("bind_material");
+				if(xmlbindmaterial)
+					node.materials = this.readBindMaterials( xmlbindmaterial );
+
 				if(mesh_data)
 				{
 					var mesh = mesh_data;
@@ -478,8 +511,8 @@ global.Collada = {
 	{
 		var c = root.childNodes;
 		for(var i = 0; i < c.length; ++i)
-			if(c[i].localName)
-				return c[i];
+			if(c.item(i).localName)
+				return c.item(i);
 		return null;
 	},
 
@@ -673,6 +706,92 @@ global.Collada = {
 	{
 		//identity
 		var matrix = mat4.create(); 
+		var temp = mat4.create(); 
+		var tmpq = quat.create();
+		
+		var flip_fix = false;
+
+		//search for the matrix
+		for(var i = 0; i < xmlnode.childNodes.length; i++)
+		{
+			var xml = xmlnode.childNodes.item(i);
+
+			if(xml.localName == "matrix")
+			{
+				var matrix = this.readContentAsFloats(xml);
+				//console.log("Nodename: " + xmlnode.getAttribute("id"));
+				//console.log(matrix);
+				this.transformMatrix(matrix, level == 0);
+				//console.log(matrix);
+				return matrix;
+			}
+
+			if(xml.localName == "translate")
+			{
+				var values = this.readContentAsFloats(xml);
+				if(flip && level > 0)
+				{
+					var tmp = values[1];
+					values[1] = values[2];
+					values[2] = -tmp; //swap coords
+				}
+
+				mat4.translate( matrix, matrix, values );
+				continue;
+			}
+
+			//rotate
+			if(xml.localName == "rotate")
+			{
+				var values = this.readContentAsFloats(xml);
+				if(values.length == 4) //x,y,z, angle
+				{
+					var id = xml.getAttribute("sid");
+					if(id == "jointOrientX")
+					{
+						values[3] += 90;
+						flip_fix = true;
+					}
+					//rotateX & rotateY & rotateZ done below
+
+					if(flip)
+					{
+						var tmp = values[1];
+						values[1] = values[2];
+						values[2] = -tmp; //swap coords
+					}
+
+					if(values[3] != 0.0)
+					{
+						quat.setAxisAngle( tmpq, values.subarray(0,3), values[3] * DEG2RAD);
+						mat4.fromQuat( temp, tmpq );
+						mat4.multiply(matrix, matrix, temp);
+					}
+				}
+				continue;
+			}
+
+			//scale
+			if(xml.localName == "scale")
+			{
+				var values = this.readContentAsFloats(xml);
+				if(flip)
+				{
+					var tmp = values[1];
+					values[1] = values[2];
+					values[2] = -tmp; //swap coords
+				}
+				mat4.scale( matrix, matrix, values );
+			}
+		}
+
+		return matrix;
+	},
+
+	readTransform2: function(xmlnode, level, flip)
+	{
+		//identity
+		var matrix = mat4.create(); 
 		var rotation = quat.create();
 		var tmpmatrix = mat4.create();
 		var tmpq = quat.create();
@@ -715,6 +834,7 @@ global.Collada = {
 						values[3] += 90;
 						flip_fix = true;
 					}
+					//rotateX & rotateY & rotateZ done below
 
 					if(flip)
 					{
@@ -723,8 +843,11 @@ global.Collada = {
 						values[2] = -tmp; //swap coords
 					}
 
-					quat.setAxisAngle(tmpq, values.subarray(0,3), values[3] * DEG2RAD);
-					quat.multiply(rotation,rotation,tmpq);
+					if(values[3] != 0.0)
+					{
+						quat.setAxisAngle( tmpq, values.subarray(0,3), values[3] * DEG2RAD);
+						quat.multiply(rotation,rotation,tmpq);
+					}
 				}
 				continue;
 			}
@@ -840,11 +963,16 @@ global.Collada = {
 		var facemap = {};
 		var vertex_remap = [];
 		var indicesArray = [];
+		var last_start = 0;
+		var group_name = "";
+		var material_name = "";
 
 		//for every triangles set (warning, some times they are repeated...)
 		for(var tris = 0; tris < xmltriangles.length; tris++)
 		{
 			var xml_shape_root = xmltriangles.item(tris);
+
+			material_name = xml_shape_root.getAttribute("material");
 
 			//for each buffer (input) build the structure info
 			var xmlinputs = xml_shape_root.querySelectorAll("input");
@@ -916,7 +1044,8 @@ global.Collada = {
 
 					if(!triangles) //split polygons then
 					{
-						if(k == 0)	first_index = current_index;
+						if(k == 0)
+							first_index = current_index;
 						if(k > 2 * num_data_vertex) //triangulate polygons
 						{
 							indicesArray.push( first_index );
@@ -928,21 +1057,28 @@ global.Collada = {
 				}//per vertex
 			}//per polygon
 
-			groups.push(indicesArray.length);
+			var group = {
+				name: group_name || ("group" + tris),
+				start: last_start,
+				length: indicesArray.length - last_start,
+				material: material_name || ""
+			};
+			last_start = indicesArray.length;
+			groups.push( group );
 		}//per triangles group
 
 
 		var mesh = {
-			vertices: new Float32Array(buffers[0][1]),
-			groups: groups,
-			_remap: new Uint16Array(vertex_remap)
+			vertices: new Float32Array( buffers[0][1] ),
+			info: { groups: groups },
+			_remap: new Uint32Array(vertex_remap)
 		};
 
+		//rename buffers (DAE has other names)
 		var translator = {
 			"normal":"normals",
 			"texcoord":"coords"
 		};
-
 		for(var i = 1; i < buffers.length; ++i)
 		{
 			var name = buffers[i][0].toLowerCase();
@@ -957,7 +1093,12 @@ global.Collada = {
 		}
 		
 		if(indicesArray.length)
-			mesh.triangles = new Uint16Array(indicesArray);
+		{
+			if(mesh.vertices.length > 256*256)
+				mesh.triangles = new Uint32Array(indicesArray);
+			else
+				mesh.triangles = new Uint16Array(indicesArray);
+		}
 
 		//console.log(mesh);
 
@@ -996,12 +1137,10 @@ global.Collada = {
 			}
 		}
 
-
 		//extra info
 		mesh.filename = id;
 		mesh.object_type = "Mesh";
 		return mesh;
-		
 	},
 
 	//like querySelector but allows spaces in names because COLLADA allows space in names
@@ -1238,15 +1377,16 @@ global.Collada = {
 		if(!xmlcontroller) return null;
 
 		var use_indices = false;
+		var mesh = null;
 		var xmlskin = xmlcontroller.querySelector("skin");
 		if(xmlskin)
-			return this.readSkinController(xmlskin, flip, scene);
+			mesh = this.readSkinController(xmlskin, flip, scene);
 
 		var xmlmorph = xmlcontroller.querySelector("morph");
 		if(xmlmorph)
-			return this.readMorphController(xmlmorph, flip, scene);
+			mesh = this.readMorphController(xmlmorph, flip, scene, mesh );
 
-		return null;
+		return mesh;
 	},
 
 	//read this to more info about DAE and skinning https://collada.org/mediawiki/index.php/Skinning
@@ -1306,6 +1446,11 @@ global.Collada = {
 				var inv_mat = inv_bind_source.subarray(i*16,i*16+16);
 				var nodename = joints_source[i];
 				var node = this._nodes_by_id[ nodename ];
+				if(!node)
+				{
+					console.warn("Node " + nodename + " not found");
+					continue;
+				}
 				this.transformMatrix(inv_mat, node._depth == 0, true );
 				joints.push([ nodename, inv_mat ]);
 			}
@@ -1413,7 +1558,7 @@ global.Collada = {
 
 			//console.log("Bones: ", joints.length, "Max bone: ", max_bone);
 			if(max_bone >= joints.length)
-				console.warning("Mesh uses higher bone index than bones found");
+				console.warn("Mesh uses higher bone index than bones found");
 
 			mesh.weights = final_weights;
 			mesh.bone_indices = final_bone_indices;
@@ -1425,7 +1570,8 @@ global.Collada = {
 		return mesh;
 	},
 
-	readMorphController: function(xmlmorph, flip, scene)
+	//NOT TESTED
+	readMorphController: function(xmlmorph, flip, scene, mesh)
 	{
 		var id_geometry = xmlmorph.getAttribute("source");
 		var base_mesh = this.readGeometry( id_geometry, flip );
@@ -1465,10 +1611,31 @@ global.Collada = {
 			var id = "#" + targets[i];
 			var geometry = this.readGeometry( id, flip );
 			scene.meshes[id] = geometry;
-			morphs.push([id, weights[i]]);
+			morphs.push( [id, weights[i]] );
 		}
 
-		return { type: "morph", mesh: base_mesh, morph_targets: morphs };
+		base_mesh.morph_targets = morphs;
+		return base_mesh;
+	},
+
+	readBindMaterials: function( xmlbind_material, mesh )
+	{
+		var materials = [];
+
+		var xmltechniques = xmlbind_material.querySelectorAll("technique_common");
+		for(var i = 0; i < xmltechniques.length; i++)
+		{
+			var xmltechnique = xmltechniques.item(i);
+			var xmlinstance_materials = xmltechnique.querySelectorAll("instance_material");
+			for(var j = 0; j < xmlinstance_materials.length; j++)
+			{
+				var xmlinstance_material = xmlinstance_materials.item(j);
+				if(xmlinstance_material)
+					materials.push( xmlinstance_material.getAttribute("symbol") );
+			}
+		}
+
+		return materials;
 	},
 
 	readSources: function(xmlnode, flip)
@@ -1650,6 +1817,7 @@ if(!isWorker)
 			switch(data.action)
 			{
 				case "log": console.log.apply( console, data.params ); break;
+				case "warn": console.warn.apply( console, data.params ); break;
 				case "exception": 
 					console.error.apply( console, data.params ); 
 					if(Collada.onerror)
