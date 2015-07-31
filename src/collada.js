@@ -99,6 +99,10 @@ global.Collada = {
 	safeString: function (str) { 
 		if(!str)
 			return "";
+
+		if(this.convertID)
+			return this.convertID(str);
+
 		return str.replace(/ /g,"_"); 
 	},
 
@@ -272,7 +276,7 @@ global.Collada = {
 
 		//hack to avoid problems with bones with spaces in names
 		this._nodes_by_id = {}; //clear
-		this.readAllNodeNames(xmlvisual_scene);
+		//this.readAllNodeNames(xmlvisual_scene);
 
 		//Create a scene tree
 		var scene = { 
@@ -292,10 +296,19 @@ global.Collada = {
 			if(xmlnodes.item(i).localName != "node")
 				continue;
 
-			var node = this.readNode( xmlnodes.item(i), scene, 0, flip );
+			var node = this.readNodeTree( xmlnodes.item(i), scene, 0, flip );
 			if(node)
 				scene.root.children.push(node);
 		}
+
+		//parse nodes info (two steps so we have first all the scene tree)
+		for(var i = 0; i < xmlnodes.length; i++)
+		{
+			if(xmlnodes.item(i).localName != "node")
+				continue;
+			this.readNodeInfo( xmlnodes.item(i), scene, 0, flip );
+		}
+
 
 		//read animations
 		var animations = this.readAnimations(root, scene);
@@ -314,6 +327,7 @@ global.Collada = {
 	},
 
 	/* Collect node ids, in case there is bones (with spaces in name) I need to know the nodenames in advance */
+	/*
 	readAllNodeNames: function(xmlnode)
 	{
 		var node_id = this.safeString( xmlnode.getAttribute("id") );
@@ -335,8 +349,9 @@ global.Collada = {
 			this.readAllNodeNames(xmlchild);
 		}
 	},
+		*/
 
-	readNode: function(xmlnode, scene, level, flip)
+	readNodeTree: function(xmlnode, scene, level, flip)
 	{
 		var node_id = this.safeString( xmlnode.getAttribute("id") );
 		var node_sid = this.safeString( xmlnode.getAttribute("sid") );
@@ -344,12 +359,14 @@ global.Collada = {
 		if(!node_id && !node_sid)
 			return null;
 
-		var node_type = xmlnode.getAttribute("type");
 		var node = { id: node_sid || node_id, children:[], _depth: level };
+		var node_type = xmlnode.getAttribute("type");
 		var node_name = xmlnode.getAttribute("name");
 		if( node_name)
 			node.name = node_name;
 		this._nodes_by_id[ node.id ] = node;
+		if( node_sid )
+			this._nodes_by_id[ node_sid ] = node;
 
 		//transform
 		node.model = this.readTransform(xmlnode, level, flip );
@@ -362,9 +379,35 @@ global.Collada = {
 			//children
 			if(xmlchild.localName == "node")
 			{
-				var child_node = this.readNode(xmlchild, scene, level+1, flip);
+				var child_node = this.readNodeTree(xmlchild, scene, level+1, flip);
 				if(child_node)
 					node.children.push( child_node );
+				continue;
+			}
+		}
+
+		return node;
+	},
+
+	readNodeInfo: function(xmlnode, scene, level, flip)
+	{
+		var node_id = this.safeString( xmlnode.getAttribute("id") );
+		var node_sid = this.safeString( xmlnode.getAttribute("sid") );
+
+		if(!node_id && !node_sid)
+			return null;
+
+		var node = this._nodes_by_id[ node_id || node_sid ];
+
+		//node elements
+		for( var i = 0; i < xmlnode.childNodes.length; i++ )
+		{
+			var xmlchild = xmlnode.childNodes.item(i);
+
+			//children
+			if(xmlchild.localName == "node")
+			{
+				this.readNodeInfo( xmlchild, scene, level+1, flip );
 				continue;
 			}
 
@@ -464,8 +507,6 @@ global.Collada = {
 
 			//other possible tags?
 		}
-
-		return node;
 	},
 
 	//if you want to rename some material names
@@ -930,7 +971,7 @@ global.Collada = {
 			xmlpolygons = xmlmesh.querySelector("polylist");
 			if(xmlpolygons)
 			{
-				console.error("Polylist not supported, please be sure to enable TRIANGULATE option in your exporter.");
+				console.warn("Polylist not supported, please be sure to enable TRIANGULATE option in your exporter.");
 				return null;
 			}
 			//polylist = true;
@@ -1219,6 +1260,7 @@ global.Collada = {
 
 		var default_take = { tracks: [] };
 		var tracks = default_take.tracks;
+		var max_time = 0;
 
 		for(var i = 0; i < xmlanimation_childs.length; ++i)
 		{
@@ -1301,23 +1343,29 @@ global.Collada = {
 			//construct animation
 			var path = target.split("/");
 
-			var anim = {}
-			anim.nodename = this.safeString( path[0] ); //where it goes
-			anim.property = path[1];
-			var node = this._nodes_by_id[ anim.nodename ];
-
+			var anim = {};
+			var nodename = path[0]; //safeString ?
+			var locator = nodename + "/" + path[1];
+			//anim.nodename = this.safeString( path[0] ); //where it goes
+			anim.name = path[1];
+			anim.property = locator;
+			var node = this._nodes_by_id[ nodename ];
+			var type = "number";
 			var element_size = 1;
 			var param_type = params["OUTPUT"];
 			switch(param_type)
 			{
 				case "float": element_size = 1; break;
-				case "float3x3": element_size = 9; break;
-				case "float4x4": element_size = 16; break;
+				case "float3x3": element_size = 9; type = "mat3"; break;
+				case "float4x4": element_size = 16; type = "mat4"; break;
 				default: break;
 			}
 
+			anim.type = type;
 			anim.value_size = element_size;
 			anim.duration = time_data[ time_data.length - 1]; //last sample
+			if(max_time < anim.duration)
+				max_time = anim.duration;
 
 			var value_data = sources[ inputs["OUTPUT"].source ];
 			if(!value_data) continue;
@@ -1333,7 +1381,7 @@ global.Collada = {
 				var value = value_data.subarray( j * element_size, (j+1) * element_size );
 				if(param_type == "float4x4")
 				{
-					this.transformMatrix( value, node._depth == 0 );
+					this.transformMatrix( value, node ? node._depth == 0 : 0 );
 					//mat4.transpose(value, value);
 				}
 				anim_data.set(value, j * sample_size + 1); //set data
@@ -1353,7 +1401,9 @@ global.Collada = {
 		if(!tracks.length) 
 			return null; //empty animation
 
-		animations.takes["default"] = default_take;
+		default_take.name = "default";
+		default_take.duration = max_time;
+		animations.takes[ default_take.name ] = default_take;
 		return animations;
 	},		
 
@@ -1522,6 +1572,8 @@ global.Collada = {
 			//remap: because vertices order is now changed after parsing the mesh
 			var final_weights = new Float32Array(4 * num_vertices); //4 bones per vertex
 			var final_bone_indices = new Uint8Array(4 * num_vertices); //4 bones per vertex
+			var used_joints = [];
+
 			for(var i = 0; i < num_vertices; ++i)
 			{
 				var p = remap[ i ] * 4;
@@ -1546,7 +1598,7 @@ global.Collada = {
 						w[k] = w[max_pos];
 						w[max_pos] = tmp;
 						tmp = b[k];
-						b[k] = b[max_pos];
+						b[k] = b[max_pos]; 
 						b[max_pos] = tmp;
 					}
 				}
@@ -1554,16 +1606,47 @@ global.Collada = {
 				//store
 				final_weights.set( w, i*4);
 				final_bone_indices.set( b, i*4);
+
+				//mark bones used
+				if(w[0]) used_joints[b[0]] = true;
+				if(w[1]) used_joints[b[1]] = true;
+				if(w[2]) used_joints[b[2]] = true;
+				if(w[3]) used_joints[b[3]] = true;
+			}
+
+			if(max_bone >= joints.length)
+				console.warn("Mesh uses higher bone index than bones found");
+
+			//trim unused bones (collada could give you 100 bones for an object that only uses a fraction of them)
+			if(1)
+			{
+				var new_bones = [];
+				var bones_translation = {};
+				for(var i = 0; i < used_joints.length; ++i)
+					if(used_joints[i])
+					{
+						bones_translation[i] = new_bones.length;
+						new_bones.push( joints[i] );
+					}
+
+				//in case there are less bones in use...
+				if(new_bones.length < joints.length)
+				{
+					//remap
+					for(var i = 0; i < final_bone_indices.length; i++)
+						final_bone_indices[i] = bones_translation[ final_bone_indices[i] ];
+					joints = new_bones;
+				}
+				//console.log("Bones: ", joints.length, " used:", num_used_joints );
 			}
 
 			//console.log("Bones: ", joints.length, "Max bone: ", max_bone);
-			if(max_bone >= joints.length)
-				console.warn("Mesh uses higher bone index than bones found");
 
 			mesh.weights = final_weights;
 			mesh.bone_indices = final_bone_indices;
 			mesh.bones = joints;
 			mesh.bind_matrix = bind_matrix;
+
 			delete mesh["_remap"];
 		}
 
