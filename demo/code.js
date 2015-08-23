@@ -113,13 +113,22 @@ function init()
 			var data = event.target.result;
 			Collada.onerror = onParsed;
 
-			if(1) //switch between mainthread and worker
+			try
 			{
-				onParsed( Collada.parse( data, null, filename ) );
+				if(1) //switch between mainthread and worker
+				{
+					onParsed( Collada.parse( data, null, filename ) );
+				}
+				else
+				{
+					Collada.parseInWorker( data, onParsed );
+				}
 			}
-			else
+			catch (err)
 			{
-				Collada.parseInWorker( data, onParsed );
+				onParsed(null);
+				throw new Error(err.stack);
+				return false;
 			}
 		};
 

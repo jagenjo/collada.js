@@ -443,7 +443,7 @@ global.Collada = {
 
 						var matname = xmlmaterial.getAttribute("target").toString().substr(1);
 						//matname = matname.replace(/ /g,"_"); //names cannot have spaces
-						if(!scene.meshes[matname])
+						if(!scene.materials[ matname ])
 						{
 							var material = this.readMaterial(matname);
 							if(material)
@@ -487,7 +487,7 @@ global.Collada = {
 
 					mesh.name = url.toString();
 					node.mesh = url.toString();
-					scene.meshes[url] = mesh;
+					scene.meshes[ url ] = mesh;
 				}
 			}
 
@@ -934,9 +934,8 @@ global.Collada = {
 			return null;
 		}
 
-		var use_indices = false;
 		var xmlmesh = xmlgeometry.querySelector("mesh");
-			
+		
 		//get data sources
 		var sources = {};
 		var xmlsources = xmlmesh.querySelectorAll("source");
@@ -960,45 +959,99 @@ global.Collada = {
 		vertices_source = sources[ xmlvertices.getAttribute("source").substr(1) ];
 		sources[ xmlmesh.querySelector("vertices").getAttribute("id") ] = vertices_source;
 
-		var groups = [];
-
-		var triangles = false;
-		var polylist = false;
-		var vcount = null;
+		var mesh = null;
 		var xmlpolygons = xmlmesh.querySelector("polygons");
+		if( xmlpolygons )
+			mesh = this.readTriangles( sources, xmlpolygons );
+
 		if(!xmlpolygons)
 		{
-			xmlpolygons = xmlmesh.querySelector("polylist");
-			if(xmlpolygons)
+			var xmltriangles = xmlmesh.querySelectorAll("triangles");
+			if(xmltriangles && xmltriangles.length)
+				mesh = this.readTriangles( sources, xmltriangles );
+		}
+
+		if(!mesh)
+		{
+			if(xmlmesh.querySelector("polylist"))
 			{
 				console.warn("Polylist not supported, please be sure to enable TRIANGULATE option in your exporter.");
 				return null;
 			}
 			//polylist = true;
+			//var vcount = null;
 			//var xmlvcount = xmlpolygons.querySelector("vcount");
 			//var vcount = this.readContentAsUInt32( xmlvcount );
+
+			var xmllinestrip = xmlmesh.querySelector("linestrips");
+			if(xmllinestrip)
+			{
+				mesh = this.readLineStrip( sources, xmllinestrip );
+			}
 		}
-		if(!xmlpolygons)
-		{
-			xmlpolygons = xmlmesh.querySelector("triangles");
-			triangles = true;
-		}
-		if(!xmlpolygons)
+
+		if(!mesh)
 		{
 			console.log("no polygons or triangles in mesh: " + id);
 			return null;
 		}
-
-
+	
+		/*
 		var xmltriangles = xmlmesh.querySelectorAll("triangles");
 		if(!xmltriangles.length)
 		{
 			console.error("no triangles in mesh: " + id);
 			return null;
 		}
-		else
-			triangles = true;
+		//console.log(mesh);
+		*/
 
+
+		//swap coords (X,Y,Z) -> (X,Z,-Y)
+		if(flip && !this.no_flip)
+		{
+			var tmp = 0;
+			var array = mesh.vertices;
+			for(var i = 0, l = array.length; i < l; i += 3)
+			{
+				tmp = array[i+1]; 
+				array[i+1] = array[i+2];
+				array[i+2] = -tmp; 
+			}
+
+			array = mesh.normals;
+			for(var i = 0, l = array.length; i < l; i += 3)
+			{
+				tmp = array[i+1]; 
+				array[i+1] = array[i+2];
+				array[i+2] = -tmp; 
+			}
+		}
+
+		//transferables for worker
+		if(isWorker && this.use_transferables)
+		{
+			for(var i in mesh)
+			{
+				var data = mesh[i];
+				if(data && data.buffer && data.length > 100)
+				{
+					this._transferables.push(data.buffer);
+				}
+			}
+		}
+
+		//extra info
+		mesh.filename = id;
+		mesh.object_type = "Mesh";
+		return mesh;
+	},
+
+	readTriangles: function( sources, xmltriangles )
+	{
+		var use_indices = false;
+
+		var groups = [];
 		var buffers = [];
 		var last_index = 0;
 		var facemap = {};
@@ -1012,6 +1065,7 @@ global.Collada = {
 		for(var tris = 0; tris < xmltriangles.length; tris++)
 		{
 			var xml_shape_root = xmltriangles.item(tris);
+			var triangles = xml_shape_root.localName == "triangles";
 
 			material_name = xml_shape_root.getAttribute("material");
 
@@ -1108,13 +1162,19 @@ global.Collada = {
 			groups.push( group );
 		}//per triangles group
 
-
 		var mesh = {
 			vertices: new Float32Array( buffers[0][1] ),
 			info: { groups: groups },
 			_remap: new Uint32Array(vertex_remap)
 		};
 
+		this.transformMeshInfo( mesh, buffers, indicesArray );
+
+		return mesh;
+	},
+
+	transformMeshInfo: function( mesh, buffers, indicesArray )
+	{
 		//rename buffers (DAE has other names)
 		var translator = {
 			"normal":"normals",
@@ -1124,7 +1184,8 @@ global.Collada = {
 		{
 			var name = buffers[i][0].toLowerCase();
 			var data = buffers[i][1];
-			if(!data.length) continue;
+			if(!data.length)
+				continue;
 
 			if(translator[name])
 				name = translator[name];
@@ -1133,7 +1194,7 @@ global.Collada = {
 			mesh[ name ] = new Float32Array(data); //are they always float32? I think so
 		}
 		
-		if(indicesArray.length)
+		if(indicesArray && indicesArray.length)
 		{
 			if(mesh.vertices.length > 256*256)
 				mesh.triangles = new Uint32Array(indicesArray);
@@ -1141,47 +1202,103 @@ global.Collada = {
 				mesh.triangles = new Uint16Array(indicesArray);
 		}
 
-		//console.log(mesh);
-
-
-		//swap coords (X,Y,Z) -> (X,Z,-Y)
-		if(flip && !this.no_flip)
-		{
-			var tmp = 0;
-			var array = mesh.vertices;
-			for(var i = 0, l = array.length; i < l; i += 3)
-			{
-				tmp = array[i+1]; 
-				array[i+1] = array[i+2];
-				array[i+2] = -tmp; 
-			}
-
-			array = mesh.normals;
-			for(var i = 0, l = array.length; i < l; i += 3)
-			{
-				tmp = array[i+1]; 
-				array[i+1] = array[i+2];
-				array[i+2] = -tmp; 
-			}
-		}
-
-		//transferables for worker
-		if(isWorker && this.use_transferables)
-		{
-			for(var i in mesh)
-			{
-				var data = mesh[i];
-				if(data && data.buffer && data.length > 100)
-				{
-					this._transferables.push(data.buffer);
-				}
-			}
-		}
-
-		//extra info
-		mesh.filename = id;
-		mesh.object_type = "Mesh";
 		return mesh;
+	},
+
+	readLineStrip: function(sources, xmllinestrip)
+	{
+		var use_indices = false;
+
+		var buffers = [];
+		var last_index = 0;
+		var facemap = {};
+		var vertex_remap = [];
+		var indicesArray = [];
+		var last_start = 0;
+		var group_name = "";
+		var material_name = "";
+
+		var tris = 0; //used in case there are several strips
+
+		//for each buffer (input) build the structure info
+		var xmlinputs = xmllinestrip.querySelectorAll("input");
+		if(tris == 0) //first iteration, create buffers
+			for(var i = 0; i < xmlinputs.length; i++)
+			{
+				var xmlinput = xmlinputs.item(i);
+				if(!xmlinput.getAttribute) 
+					continue;
+				var semantic = xmlinput.getAttribute("semantic").toUpperCase();
+				var stream_source = sources[ xmlinput.getAttribute("source").substr(1) ];
+				var offset = parseInt( xmlinput.getAttribute("offset") );
+				var data_set = 0;
+				if(xmlinput.getAttribute("set"))
+					data_set = parseInt( xmlinput.getAttribute("set") );
+
+				buffers.push([semantic, [], stream_source.stride, stream_source.data, offset, data_set]);
+			}
+		//assuming buffers are ordered by offset
+
+		//iterate data
+		var xmlps = xmllinestrip.querySelectorAll("p");
+		var num_data_vertex = buffers.length; //one value per input buffer
+
+		//for every polygon (could be one with all the indices, could be several, depends on the program)
+		for(var i = 0; i < xmlps.length; i++)
+		{
+			var xmlp = xmlps.item(i);
+			if(!xmlp || !xmlp.textContent) 
+				break;
+
+			var data = xmlp.textContent.trim().split(" ");
+
+			//used for triangulate polys
+			var first_index = -1;
+			var current_index = -1;
+			var prev_index = -1;
+
+			if(use_indices && last_index >= 256*256)
+				break;
+
+			//for every pack of indices in the polygon (vertex, normal, uv, ... )
+			for(var k = 0, l = data.length; k < l; k += num_data_vertex)
+			{
+				var vertex_id = data.slice(k,k+num_data_vertex).join(" "); //generate unique id
+
+				prev_index = current_index;
+				if(facemap.hasOwnProperty(vertex_id)) //add to arrays, keep the index
+					current_index = facemap[vertex_id];
+				else
+				{
+					for(var j = 0; j < buffers.length; ++j)
+					{
+						var buffer = buffers[j];
+						var index = parseInt(data[k + j]);
+						var array = buffer[1]; //array with all the data
+						var source = buffer[3]; //where to read the data from
+						if(j == 0)
+							vertex_remap[ array.length / num_data_vertex ] = index;
+						index *= buffer[2]; //stride
+						for(var x = 0; x < buffer[2]; ++x)
+							array.push( source[index+x] );
+					}
+					
+					current_index = last_index;
+					last_index += 1;
+					facemap[vertex_id] = current_index;
+				}
+
+				indicesArray.push( current_index );
+			}//per vertex
+		}//per polygon
+
+		var mesh = {
+			primitive: "line_strip",
+			vertices: new Float32Array( buffers[0][1] ),
+			info: {}
+		};
+
+		return this.transformMeshInfo( mesh, buffers, indicesArray );
 	},
 
 	//like querySelector but allows spaces in names because COLLADA allows space in names
@@ -1693,7 +1810,7 @@ global.Collada = {
 		{
 			var id = "#" + targets[i];
 			var geometry = this.readGeometry( id, flip );
-			scene.meshes[id] = geometry;
+			scene.meshes[ id ] = geometry;
 			morphs.push( [id, weights[i]] );
 		}
 
