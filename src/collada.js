@@ -962,32 +962,32 @@ global.Collada = {
 		var mesh = null;
 		var xmlpolygons = xmlmesh.querySelector("polygons");
 		if( xmlpolygons )
-			mesh = this.readTriangles( sources, xmlpolygons );
+			mesh = this.readTriangles( xmlpolygons, sources );
 
-		if(!xmlpolygons)
+		if(!mesh)
 		{
 			var xmltriangles = xmlmesh.querySelectorAll("triangles");
 			if(xmltriangles && xmltriangles.length)
-				mesh = this.readTriangles( sources, xmltriangles );
+				mesh = this.readTriangles( xmltriangles, sources );
 		}
 
 		if(!mesh)
 		{
-			if(xmlmesh.querySelector("polylist"))
-			{
-				console.warn("Polylist not supported, please be sure to enable TRIANGULATE option in your exporter.");
-				return null;
-			}
 			//polylist = true;
 			//var vcount = null;
 			//var xmlvcount = xmlpolygons.querySelector("vcount");
 			//var vcount = this.readContentAsUInt32( xmlvcount );
+			var xmlpolylist = xmlmesh.querySelector("polylist");
+			if(xmlpolylist)
+				mesh = this.readPolylist( xmlpolylist, sources );
+		}
 
+
+		if(!mesh)
+		{
 			var xmllinestrip = xmlmesh.querySelector("linestrips");
 			if(xmllinestrip)
-			{
 				mesh = this.readLineStrip( sources, xmllinestrip );
-			}
 		}
 
 		if(!mesh)
@@ -996,17 +996,6 @@ global.Collada = {
 			return null;
 		}
 	
-		/*
-		var xmltriangles = xmlmesh.querySelectorAll("triangles");
-		if(!xmltriangles.length)
-		{
-			console.error("no triangles in mesh: " + id);
-			return null;
-		}
-		//console.log(mesh);
-		*/
-
-
 		//swap coords (X,Y,Z) -> (X,Z,-Y)
 		if(flip && !this.no_flip)
 		{
@@ -1047,7 +1036,7 @@ global.Collada = {
 		return mesh;
 	},
 
-	readTriangles: function( sources, xmltriangles )
+	readTriangles: function( xmltriangles, sources )
 	{
 		var use_indices = false;
 
@@ -1070,22 +1059,9 @@ global.Collada = {
 			material_name = xml_shape_root.getAttribute("material");
 
 			//for each buffer (input) build the structure info
-			var xmlinputs = xml_shape_root.querySelectorAll("input");
-			if(tris == 0) //first iteration, create buffers
-				for(var i = 0; i < xmlinputs.length; i++)
-				{
-					var xmlinput = xmlinputs.item(i);
-					if(!xmlinput.getAttribute) 
-						continue;
-					var semantic = xmlinput.getAttribute("semantic").toUpperCase();
-					var stream_source = sources[ xmlinput.getAttribute("source").substr(1) ];
-					var offset = parseInt( xmlinput.getAttribute("offset") );
-					var data_set = 0;
-					if(xmlinput.getAttribute("set"))
-						data_set = parseInt( xmlinput.getAttribute("set") );
+			if(tris == 0)
+				buffers = this.readShapeInputs( xml_shape_root, sources );
 
-					buffers.push([semantic, [], stream_source.stride, stream_source.data, offset, data_set]);
-				}
 			//assuming buffers are ordered by offset
 
 			//iterate data
@@ -1171,6 +1147,119 @@ global.Collada = {
 		this.transformMeshInfo( mesh, buffers, indicesArray );
 
 		return mesh;
+	},
+
+	readPolylist: function( xml_shape_root, sources )
+	{
+		var use_indices = false;
+
+		var groups = [];
+		var buffers = [];
+		var last_index = 0;
+		var facemap = {};
+		var vertex_remap = [];
+		var indicesArray = [];
+		var last_start = 0;
+		var group_name = "";
+		var material_name = "";
+
+		material_name = xml_shape_root.getAttribute("material");
+		buffers = this.readShapeInputs( xml_shape_root, sources );
+
+		var xmlvcount = xml_shape_root.querySelector("vcount");
+		var vcount = this.readContentAsUInt32( xmlvcount );
+
+		var xmlp = xml_shape_root.querySelector("p");
+		var data = this.readContentAsUInt32( xmlp );
+
+		var num_data_vertex = buffers.length;
+
+		var pos = 0;
+		for(var i = 0; i < vcount.length; ++i)
+		{
+			var num_vertices = vcount[i];
+
+			var first_index = -1;
+			var current_index = -1;
+			var prev_index = -1;
+
+			//iterate vertices of this polygon
+			for(var k = 0; k < num_vertices; ++k )
+			{
+				var vertex_id = data.subarray(pos,pos + num_data_vertex).join(" ");
+
+				prev_index = current_index;
+				if(facemap.hasOwnProperty(vertex_id)) //add to arrays, keep the index
+					current_index = facemap[vertex_id];
+				else
+				{
+					for(var j = 0; j < buffers.length; ++j)
+					{
+						var buffer = buffers[j];
+						var index = parseInt( data[pos + j] ); //p
+						var array = buffer[1]; //array with all the data
+						var source = buffer[3]; //where to read the data from
+						if(j == 0)
+							vertex_remap[ array.length / num_data_vertex ] = index;
+						index *= buffer[2]; //stride
+						for(var x = 0; x < buffer[2]; ++x)
+							array.push( source[index+x] );
+					}
+					
+					current_index = last_index;
+					last_index += 1;
+					facemap[vertex_id] = current_index;
+				}
+
+				if(num_vertices > 3) //split polygons then
+				{
+					if(k == 0)
+						first_index = current_index;
+					if(k > 2 * num_data_vertex) //triangulate polygons
+					{
+						indicesArray.push( first_index );
+						indicesArray.push( prev_index );
+					}
+				}
+
+				indicesArray.push( current_index );
+				pos += num_data_vertex;
+			}//per vertex
+
+		}//per polygon
+
+		var mesh = {
+			vertices: new Float32Array( buffers[0][1] ),
+			info: {},
+			_remap: new Uint32Array( vertex_remap )
+		};
+
+		this.transformMeshInfo( mesh, buffers, indicesArray );
+
+		return mesh;
+	},
+
+	readShapeInputs: function(xml_shape_root, sources)
+	{
+		var buffers = [];
+
+		var xmlinputs = xml_shape_root.querySelectorAll("input");
+		for(var i = 0; i < xmlinputs.length; i++)
+		{
+			var xmlinput = xmlinputs.item(i);
+			if(!xmlinput.getAttribute) 
+				continue;
+			var semantic = xmlinput.getAttribute("semantic").toUpperCase();
+			var stream_source = sources[ xmlinput.getAttribute("source").substr(1) ];
+			var offset = parseInt( xmlinput.getAttribute("offset") );
+			var data_set = 0;
+			if(xmlinput.getAttribute("set"))
+				data_set = parseInt( xmlinput.getAttribute("set") );
+
+			buffers.push([semantic, [], stream_source.stride, stream_source.data, offset, data_set]);
+		}
+
+		return buffers;
 	},
 
 	transformMeshInfo: function( mesh, buffers, indicesArray )
@@ -1377,152 +1466,179 @@ global.Collada = {
 
 		var default_take = { tracks: [] };
 		var tracks = default_take.tracks;
-		var max_time = 0;
 
 		for(var i = 0; i < xmlanimation_childs.length; ++i)
 		{
 			var xmlanimation = xmlanimation_childs.item(i);
-			if(xmlanimation.nodeType != 1 ) //no tag
+			if(xmlanimation.nodeType != 1 || xmlanimation.localName != "animation") //no tag
 				continue;
 
 			var anim_id = xmlanimation.getAttribute("id");
-
-			xmlanimation = xmlanimation.querySelector("animation"); //yes... DAE has <animation> inside animation...
-			if(!xmlanimation) continue;
-
-
-			//channels are like animated properties
-			var xmlchannel = xmlanimation.querySelector("channel");
-			if(!xmlchannel) continue;
-
-			var source = xmlchannel.getAttribute("source");
-			var target = xmlchannel.getAttribute("target");
-
-			//sampler, is in charge of the interpolation
-			//var xmlsampler = xmlanimation.querySelector("sampler" + source);
-			xmlsampler = this.findXMLNodeById(xmlanimation, "sampler", source.substr(1) );
-			if(!xmlsampler)
+			if(!anim_id) //nested animation (DAE 1.5)
 			{
-				console.error("Error DAE: Sampler not found in " + source);
-				continue;
-			}
-
-			var inputs = {};
-			var sources = {};
-			var params = {};
-			var xmlinputs = xmlsampler.querySelectorAll("input");
-
-			var time_data = null;
-
-			//iterate inputs
-			for(var j = 0; j < xmlinputs.length; j++)
-			{
-				var xmlinput = xmlinputs.item(j);
-				var source_name =  xmlinput.getAttribute("source");
-				var semantic = xmlinput.getAttribute("semantic");
-
-				//Search for source
-				var xmlsource = this.findXMLNodeById( xmlanimation, "source", source_name.substr(1) );
-				if(!xmlsource)
-					continue;
-
-				var xmlparam = xmlsource.querySelector("param");
-				if(!xmlparam) continue;
-
-				var type = xmlparam.getAttribute("type");
-				inputs[ semantic ] = { source: source_name, type: type };
-
-				var data_array = null;
-
-				if(type == "float" || type == "float4x4")
+				var xmlanimation2_childs = xmlanimation.querySelectorAll("animation");
+				for(var j = 0; j < xmlanimation2_childs.length; ++j)
 				{
-					var xmlfloatarray = xmlsource.querySelector("float_array");
-					var floats = this.readContentAsFloats( xmlfloatarray );
-					sources[ source_name ] = floats;
-					data_array = floats;
-
+					var xmlanimation2 = xmlanimation2_childs.item(j);
+					var anim = this.readAnimationTrack( xmlanimation2 );
+					tracks.push( anim );
 				}
-				else //only floats and matrices are supported in animation
-					continue;
-
-				var param_name = xmlparam.getAttribute("name");
-				if(param_name == "TIME")
-					time_data = data_array;
-				params[ param_name || "OUTPUT" ] = type;
 			}
-
-			if(!time_data)
+			else //no nested (DAE 1.4)
 			{
-				console.error("Error DAE: no TIME info found in animation: " + anim_id);
-				continue;
+				var anim = this.readAnimationTrack( xmlanimation );
+				tracks.push( anim );
 			}
-
-			//construct animation
-			var path = target.split("/");
-
-			var anim = {};
-			var nodename = path[0]; //safeString ?
-			var locator = nodename + "/" + path[1];
-			//anim.nodename = this.safeString( path[0] ); //where it goes
-			anim.name = path[1];
-			anim.property = locator;
-			var node = this._nodes_by_id[ nodename ];
-			var type = "number";
-			var element_size = 1;
-			var param_type = params["OUTPUT"];
-			switch(param_type)
-			{
-				case "float": element_size = 1; break;
-				case "float3x3": element_size = 9; type = "mat3"; break;
-				case "float4x4": element_size = 16; type = "mat4"; break;
-				default: break;
-			}
-
-			anim.type = type;
-			anim.value_size = element_size;
-			anim.duration = time_data[ time_data.length - 1]; //last sample
-			if(max_time < anim.duration)
-				max_time = anim.duration;
-
-			var value_data = sources[ inputs["OUTPUT"].source ];
-			if(!value_data) continue;
-
-			//Pack data ****************
-			var num_samples = time_data.length;
-			var sample_size = element_size + 1;
-			var anim_data = new Float32Array( num_samples * sample_size );
-			//for every sample
-			for(var j = 0; j < time_data.length; ++j)
-			{
-				anim_data[j * sample_size] = time_data[j]; //set time
-				var value = value_data.subarray( j * element_size, (j+1) * element_size );
-				if(param_type == "float4x4")
-				{
-					this.transformMatrix( value, node ? node._depth == 0 : 0 );
-					//mat4.transpose(value, value);
-				}
-				anim_data.set(value, j * sample_size + 1); //set data
-			}
-
-			if(isWorker && this.use_transferables)
-			{
-				var data = anim_data;
-				if(data && data.buffer && data.length > 100)
-					this._transferables.push(data.buffer);
-			}
-
-			anim.data = anim_data;
-			tracks.push(anim);
 		}
 
 		if(!tracks.length) 
 			return null; //empty animation
 
+		//compute animation duration
+		var max_time = 0;
+		for(var i = 0; i < tracks.length; ++i)
+			if( max_time < tracks[i].duration )
+				max_time = anim.duration;
+
 		default_take.name = "default";
 		default_take.duration = max_time;
 		animations.takes[ default_take.name ] = default_take;
 		return animations;
-	},		
+	},
+
+	readAnimationTrack: function( xmlanimation )
+	{
+		if(xmlanimation.localName != "animation")
+			return null;
+
+		var anim_id = xmlanimation.getAttribute("id");
+
+		//channels are like animated properties
+		var xmlchannel = xmlanimation.querySelector("channel");
+		if(!xmlchannel) 
+			return null;
+
+		var source = xmlchannel.getAttribute("source");
+		var target = xmlchannel.getAttribute("target");
+
+		//sampler, is in charge of the interpolation
+		//var xmlsampler = xmlanimation.querySelector("sampler" + source);
+		xmlsampler = this.findXMLNodeById(xmlanimation, "sampler", source.substr(1) );
+		if(!xmlsampler)
+		{
+			console.error("Error DAE: Sampler not found in " + source);
+			return null;
+		}
+
+		var inputs = {};
+		var sources = {};
+		var params = {};
+		var xmlinputs = xmlsampler.querySelectorAll("input");
+
+		var time_data = null;
+
+		//iterate inputs: collada separates the keyframe info in independent streams, like time, interpolation method, value )
+		for(var j = 0; j < xmlinputs.length; j++)
+		{
+			var xmlinput = xmlinputs.item(j);
+			var source_name =  xmlinput.getAttribute("source");
+
+			//there are three 
+			var semantic = xmlinput.getAttribute("semantic");
+
+			//Search for source
+			var xmlsource = this.findXMLNodeById( xmlanimation, "source", source_name.substr(1) );
+			if(!xmlsource)
+				continue;
+
+			var xmlparam = xmlsource.querySelector("param");
+			if(!xmlparam)
+				continue;
+
+			var type = xmlparam.getAttribute("type");
+			inputs[ semantic ] = { source: source_name, type: type };
+
+			var data_array = null;
+
+			if(type == "float" || type == "float4x4")
+			{
+				var xmlfloatarray = xmlsource.querySelector("float_array");
+				var floats = this.readContentAsFloats( xmlfloatarray );
+				sources[ source_name ] = floats;
+				data_array = floats;
+
+			}
+			else //only floats and matrices are supported in animation
+				continue;
+
+			var param_name = xmlparam.getAttribute("name");
+			if(param_name == "TIME")
+				time_data = data_array;
+			params[ semantic == "OUTPUT" ? semantic : param_name ] = type;
+		}
+
+		if(!time_data)
+		{
+			console.error("Error DAE: no TIME info found in animation: " + anim_id);
+			return null;
+		}
+
+		//construct animation
+		var path = target.split("/");
+
+		var anim = {};
+		var nodename = path[0]; //safeString ?
+		var locator = nodename + "/" + path[1];
+		//anim.nodename = this.safeString( path[0] ); //where it goes
+		anim.name = path[1];
+		anim.property = locator;
+		var node = this._nodes_by_id[ nodename ];
+		var type = "number";
+		var element_size = 1;
+		var param_type = params["OUTPUT"];
+		switch(param_type)
+		{
+			case "float": element_size = 1; break;
+			case "float3x3": element_size = 9; type = "mat3"; break;
+			case "float4x4": element_size = 16; type = "mat4"; break;
+			default: break;
+		}
+
+		anim.type = type;
+		anim.value_size = element_size;
+		anim.duration = time_data[ time_data.length - 1]; //last sample
+
+		var value_data = sources[ inputs["OUTPUT"].source ];
+		if(!value_data)
+			return null;
+
+		//Pack data ****************
+		var num_samples = time_data.length;
+		var sample_size = element_size + 1;
+		var anim_data = new Float32Array( num_samples * sample_size );
+		//for every sample
+		for(var j = 0; j < time_data.length; ++j)
+		{
+			anim_data[j * sample_size] = time_data[j]; //set time
+			var value = value_data.subarray( j * element_size, (j+1) * element_size );
+			if(param_type == "float4x4")
+			{
+				this.transformMatrix( value, node ? node._depth == 0 : 0 );
+				//mat4.transpose(value, value);
+			}
+			anim_data.set(value, j * sample_size + 1); //set data
+		}
+
+		if(isWorker && this.use_transferables)
+		{
+			var data = anim_data;
+			if(data && data.buffer && data.length > 100)
+				this._transferables.push(data.buffer);
+		}
+
+		anim.data = anim_data;
+		return anim;
+	},
 
 	findNode: function(root, id)
 	{
