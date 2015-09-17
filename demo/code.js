@@ -62,6 +62,10 @@ function showSceneInfo(scene)
 	{
 		var res = scene.meshes[i];
 		info = "Num. Vertices: " + res.vertices.length / 3;
+		if(res.bones)
+			info += " <span class='type'>Bones</span>";
+		if(res.morph_targets)
+			info += " <span class='type'>Morph Targets</span>";
 		log("<li><span class='id2'>" + i + "</span>: <span class='type'>" + res.object_type + "</span> " + info + "</li>");
 	}
 	log("<h2>Materials</h2>");
