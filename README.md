@@ -40,7 +40,7 @@ Collada.load( "myfile.dae", callback );
 
 Or if you already have the data and only want to parse it:
 ```js
-var scene = Collada.parse( "myfile.dae" );
+var scene = Collada.parse( my_dae_data );
 ```
 
 
