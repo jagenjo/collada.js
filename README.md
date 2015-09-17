@@ -3,14 +3,17 @@ collada.js
 
 collada.js is a parser of collada format (DAE) in javascript. It parses the common geometry info like:
 
+ * node properties (name, id)
  * transformation (matrix4x4) using glMatrix
  * geometry (vertices, normals, texture coords, skinning weights and matrix index, morph targets)
  * basic light and camera properties
  * scene structure (children)
- * basic material info
+ * basic material info (multimaterial not supported yet)
  * animation (only transformation animation)
 
 Returns an object with all the info ready to use. The data arrays are in typed-arrays. The geometry is packed in indexed buffers ready to be uploaded to the GPU.
+
+Due to the opennes of DAE every 3D authoring tool tends to exports data in a different way, thats why not all DAEs will work, but it has been tested with DAEs from Cinema4D, 3D Studio Max, Maya and Blender, although animation is still a problem with Cinema4D.
 
 It can work in the main thread or inside a worker.
 It comes with its own function **Collada.loadInWorker** that does the HttpRequest and the parsing inside the worker to avoid blocking the main thread, and uses transferables when possible.
@@ -65,6 +68,6 @@ Collada.parseInWorker( data, callback );
 Feedback
 --------
 
-This has been tested with collada files exported from Cinema4D, Maya and 3DS Max, if you have one DAE that doesnt seem propertly supported, send it to me so I can see the differences.
+This has been tested with collada files exported from Cinema4D, Blender, Maya and 3DS Max, if you have one DAE that doesnt seem propertly supported, send it to me so I can see the differences.
 
 You can write any feedback to javi.agenjo@gmail.com
