@@ -70,13 +70,6 @@ global.Collada = {
 		temp_vec4 = vec3.create();
 		temp_quat = quat.create();
 
-		mat4.fromDAE = function(str)
-		{
-			var m = new Float32Array( JSON.parse("["+str.split(" ").join(",")+"]") );
-			mat4.transpose(m,m);
-			return m;
-		}
-
 		if( isWorker )
 			console.log("Collada worker ready");
 	},
@@ -2239,12 +2232,6 @@ global.Collada = {
 
 		}
 		return matrix;
-	},
-
-	debugMatrix: function(str, first_level )
-	{
-		var m = new Float32Array( JSON.parse("["+str.split(" ").join(",")+"]") );
-		return this.transformMatrix(m, first_level );
 	}
 };
 
