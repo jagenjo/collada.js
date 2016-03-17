@@ -394,8 +394,17 @@ global.Collada = {
 		if(!node_id && !node_sid)
 			return null;
 
-		var node = { id: node_sid || node_id, children:[], _depth: level };
+		//here we create the node
+		var node = { 
+			id: node_sid || node_id, 
+			children:[], 
+			_depth: level 
+		};
+
 		var node_type = xmlnode.getAttribute("type");
+		if(node_type)
+			node.type = node_type;
+
 		var node_name = xmlnode.getAttribute("name");
 		if( node_name)
 			node.name = node_name;
@@ -655,7 +664,11 @@ global.Collada = {
 
 			if(xmlparam_value.localName.toString() == "color")
 			{
-				material[ param_name ] = this.readContentAsFloats( xmlparam_value ).subarray(0,3);
+				var value = this.readContentAsFloats( xmlparam_value );
+				if( xmlparam.getAttribute("opaque") == "RGB_ZERO")
+					material[ param_name ] = value.subarray(0,4);
+				else
+					material[ param_name ] = value.subarray(0,3);
 				continue;
 			}
 			else if(xmlparam_value.localName.toString() == "float")
@@ -1044,7 +1057,7 @@ global.Collada = {
 
 		//get streams
 		var xmlvertices = xmlmesh.querySelector("vertices input");
-		vertices_source = sources[ xmlvertices.getAttribute("source").substr(1) ];
+		var vertices_source = sources[ xmlvertices.getAttribute("source").substr(1) ];
 		sources[ xmlmesh.querySelector("vertices").getAttribute("id") ] = vertices_source;
 
 		var mesh = null;
@@ -1135,7 +1148,7 @@ global.Collada = {
 		var buffers = [];
 		var last_index = 0;
 		var facemap = {};
-		var vertex_remap = [];
+		var vertex_remap = []; //maps DAE vertex index to Mesh vertex index (because when meshes are triangulated indices are changed
 		var indicesArray = [];
 		var last_start = 0;
 		var group_name = "";
@@ -1173,30 +1186,52 @@ global.Collada = {
 				var current_index = -1;
 				var prev_index = -1;
 
-				if(use_indices && last_index >= 256*256)
-					break;
+				//discomment to force 16bits indices
+				//if(use_indices && last_index >= 256*256)
+				//	break;
+
+				var num_values_per_vertex = 1;
+				for(var b in buffers)
+					num_values_per_vertex = Math.max( num_values_per_vertex, buffers[b][4] + 1);
 
 				//for every pack of indices in the polygon (vertex, normal, uv, ... )
-				for(var k = 0, l = data.length; k < l; k += num_data_vertex)
+				var current_data_pos = 0;
+				for(var k = 0, l = data.length; k < l; k += num_values_per_vertex)
 				{
-					var vertex_id = data.slice(k,k+num_data_vertex).join(" "); //generate unique id
+					var vertex_id = data.slice(k,k+num_values_per_vertex).join(" "); //generate unique id
 
 					prev_index = current_index;
 					if(facemap.hasOwnProperty(vertex_id)) //add to arrays, keep the index
 						current_index = facemap[vertex_id];
 					else
 					{
+						//for every data buffer associated to this vertex
 						for(var j = 0; j < buffers.length; ++j)
 						{
 							var buffer = buffers[j];
-							var index = parseInt(data[k + j]);
-							var array = buffer[1]; //array with all the data
+							var array = buffer[1]; //array where we accumulate the final data as we extract if from sources
 							var source = buffer[3]; //where to read the data from
+							
+							//compute the index inside the data source array
+							//var index = parseInt(data[k + j]);
+							var index = parseInt( data[ k + buffer[4] ] );
+							//current_data_pos += buffer[4];
+
+							//remember this index in case we need to remap
 							if(j == 0)
-								vertex_remap[ array.length / num_data_vertex ] = index;
-							index *= buffer[2]; //stride
+								vertex_remap[ array.length / buffer[2] ] = index; //not sure if buffer[2], it should be number of floats per vertex (usually 3)
+								//vertex_remap[ array.length / num_data_vertex ] = index;
+
+							//compute the position inside the source buffer where the final data is located
+							index *= buffer[2]; //this works in most DAEs (not all)
+							//index = index * buffer[2] + buffer[4]; //stride(2) offset(4)
+							//index += buffer[4]; //stride(2) offset(4)
+							//extract every value of this element and store it in its final array (every x,y,z, etc)
 							for(var x = 0; x < buffer[2]; ++x)
+							{
+								if(source[index+x] === undefined) throw("UNDEFINED!"); //DEBUG
 								array.push( source[index+x] );
+							}
 						}
 						
 						current_index = last_index;
@@ -1204,7 +1239,7 @@ global.Collada = {
 						facemap[vertex_id] = current_index;
 					}
 
-					if(!triangles) //split polygons then
+					if(!triangles) //the xml element is not triangles? then split polygons in triangles
 					{
 						if(k == 0)
 							first_index = current_index;
@@ -1348,8 +1383,7 @@ global.Collada = {
 			var data_set = 0;
 			if(xmlinput.getAttribute("set"))
 				data_set = parseInt( xmlinput.getAttribute("set") );
-
-			buffers.push([semantic, [], stream_source.stride, stream_source.data, offset, data_set]);
+			buffers.push([semantic, [], stream_source.stride, stream_source.data, offset, data_set ]);
 		}
 
 		return buffers;
@@ -1439,8 +1473,8 @@ global.Collada = {
 			var current_index = -1;
 			var prev_index = -1;
 
-			if(use_indices && last_index >= 256*256)
-				break;
+			//if(use_indices && last_index >= 256*256)
+			//	break;
 
 			//for every pack of indices in the polygon (vertex, normal, uv, ... )
 			for(var k = 0, l = data.length; k < l; k += num_data_vertex)
@@ -1617,7 +1651,7 @@ global.Collada = {
 
 		//sampler, is in charge of the interpolation
 		//var xmlsampler = xmlanimation.querySelector("sampler" + source);
-		xmlsampler = this.findXMLNodeById( xmlanimation, "sampler", source.substr(1) );
+		var xmlsampler = this.findXMLNodeById( xmlanimation, "sampler", source.substr(1) );
 		if(!xmlsampler)
 		{
 			console.error("Error DAE: Sampler not found in " + source);
@@ -1930,6 +1964,7 @@ global.Collada = {
 			var final_bone_indices = new Uint8Array(4 * num_vertices); //4 bones per vertex
 			var used_joints = [];
 
+			//for every vertex in the mesh, process bone indices and weights
 			for(var i = 0; i < num_vertices; ++i)
 			{
 				var p = remap[ i ] * 4;
