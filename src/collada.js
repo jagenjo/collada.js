@@ -409,6 +409,8 @@ global.Collada = {
 		if( node_name)
 			node.name = node_name;
 		this._nodes_by_id[ node.id ] = node;
+		if( node_id )
+			this._nodes_by_id[ node_id ] = node;
 		if( node_sid )
 			this._nodes_by_id[ node_sid ] = node;
 
@@ -435,7 +437,7 @@ global.Collada = {
 		return node;
 	},
 
-	readNodeInfo: function(xmlnode, scene, level, flip)
+	readNodeInfo: function( xmlnode, scene, level, flip )
 	{
 		var node_id = this.safeString( xmlnode.getAttribute("id") );
 		var node_sid = this.safeString( xmlnode.getAttribute("sid") );
@@ -444,6 +446,11 @@ global.Collada = {
 			return null;
 
 		var node = this._nodes_by_id[ node_id || node_sid ];
+		if(!node)
+		{
+			console.warn("Collada: Node not found by id: " + (node_id || node_sid));
+			return null;
+		}
 
 		//node elements
 		for( var i = 0; i < xmlnode.childNodes.length; i++ )
@@ -998,6 +1005,7 @@ global.Collada = {
 		return matrix;
 	},
 
+	//for help read this: https://www.khronos.org/collada/wiki/Using_accessors
 	readGeometry: function(id, flip, scene)
 	{
 		//already read, could happend if several controllers point to the same mesh
@@ -1582,7 +1590,8 @@ global.Collada = {
 	readAnimations: function(root, scene)
 	{
 		var xmlanimations = root.querySelector("library_animations");
-		if(!xmlanimations) return null;
+		if(!xmlanimations)
+			return null;
 
 		var xmlanimation_childs = xmlanimations.childNodes;
 
@@ -1604,19 +1613,19 @@ global.Collada = {
 			if(!anim_id) //nested animation (DAE 1.5)
 			{
 				var xmlanimation2_childs = xmlanimation.querySelectorAll("animation");
-				for(var j = 0; j < xmlanimation2_childs.length; ++j)
+				if(xmlanimation2_childs.length)
 				{
-					var xmlanimation2 = xmlanimation2_childs.item(j);
-					var anim = this.readAnimationTrack( xmlanimation2 );
-					tracks.push( anim );
+					for(var j = 0; j < xmlanimation2_childs.length; ++j)
+					{
+						var xmlanimation2 = xmlanimation2_childs.item(j);
+						this.readAnimation( xmlanimation2, tracks );
+					}
 				}
+				else //source tracks?
+					this.readAnimation( xmlanimation, tracks );
 			}
 			else //no nested (DAE 1.4)
-			{
-				var anim = this.readAnimationTrack( xmlanimation );
-				if(anim)
-					tracks.push( anim );
-			}
+				this.readAnimation( xmlanimation, tracks );
 		}
 
 		if(!tracks.length) 
@@ -1626,7 +1635,7 @@ global.Collada = {
 		var max_time = 0;
 		for(var i = 0; i < tracks.length; ++i)
 			if( max_time < tracks[i].duration )
-				max_time = anim.duration;
+				max_time = tracks[i].duration;
 
 		default_take.name = "default";
 		default_take.duration = max_time;
@@ -1634,16 +1643,35 @@ global.Collada = {
 		return animations;
 	},
 
-	readAnimationTrack: function( xmlanimation )
+	//animation xml
+	readAnimation: function( xmlanimation, result )
 	{
 		if(xmlanimation.localName != "animation")
 			return null;
 
+		//this could be missing when there are lots of anims packed in one <animation>
 		var anim_id = xmlanimation.getAttribute("id");
 
 		//channels are like animated properties
-		var xmlchannel = xmlanimation.querySelector("channel");
-		if(!xmlchannel) 
+		var xmlchannel_list = xmlanimation.querySelectorAll("channel");
+		if(!xmlchannel_list.length)
+			return null;
+
+		var tracks = result || [];
+
+		for(var i = 0; i < xmlchannel_list.length; ++i)
+		{
+			var anim = this.readChannel( xmlchannel_list.item(i), xmlanimation );
+			if(anim)
+				tracks.push( anim );
+		}
+
+		return tracks;
+	},
+
+	readChannel: function( xmlchannel, xmlanimation )
+	{
+		if(xmlchannel.localName != "channel" || xmlanimation.localName != "animation")
 			return null;
 
 		var source = xmlchannel.getAttribute("source");
@@ -1659,8 +1687,8 @@ global.Collada = {
 		}
 
 		var inputs = {};
-		var sources = {};
 		var params = {};
+		var sources = {};
 		var xmlinputs = xmlsampler.querySelectorAll("input");
 
 		var time_data = null;
@@ -1702,12 +1730,17 @@ global.Collada = {
 			var param_name = xmlparam.getAttribute("name");
 			if(param_name == "TIME")
 				time_data = data_array;
-			params[ semantic == "OUTPUT" ? semantic : param_name ] = type;
+			if(semantic == "OUTPUT")
+				param_name = semantic;
+			if(param_name)
+				params[ param_name ] = type;
+			else
+				console.warn("Collada: <param> without name attribute in <animation>");
 		}
 
 		if(!time_data)
 		{
-			console.error("Error DAE: no TIME info found in animation: " + anim_id);
+			console.error("Error DAE: no TIME info found in <channel>: " + xmlchannel.getAttribute("source") );
 			return null;
 		}
 
@@ -1716,11 +1749,11 @@ global.Collada = {
 
 		var anim = {};
 		var nodename = path[0]; //safeString ?
-		var locator = nodename + "/" + path[1];
+		var node = this._nodes_by_id[ nodename ];
+		var locator = node.id + "/" + path[1];
 		//anim.nodename = this.safeString( path[0] ); //where it goes
 		anim.name = path[1];
 		anim.property = locator;
-		var node = this._nodes_by_id[ nodename ];
 		var type = "number";
 		var element_size = 1;
 		var param_type = params["OUTPUT"];
