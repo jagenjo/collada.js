@@ -125,6 +125,16 @@ global.Collada = {
 		return filename;
 	},
 
+	last_name: 0,
+
+	generateName: function(v)
+	{
+		v = v || "name_";
+		var name = v + this.last_name;
+		this.last_name++;
+		return name;
+	},
+
 	parse: function(data, options, filename)
 	{
 		options = options || {};
@@ -443,7 +453,11 @@ global.Collada = {
 		var node_sid = this.safeString( xmlnode.getAttribute("sid") );
 
 		if(!node_id && !node_sid)
+		{
+			console.warn("Collada: node without id, creating a random one");
+			node_id = this.generateName("node_");
 			return null;
+		}
 
 		var node = this._nodes_by_id[ node_id || node_sid ];
 		if(!node)
@@ -1813,6 +1827,7 @@ global.Collada = {
 		return null;
 	},
 
+	//reads controllers and stores them in 
 	readLibraryControllers: function( scene )
 	{
 		var xmllibrarycontrollers = this._xmlroot.querySelector("library_controllers");
@@ -1831,13 +1846,13 @@ global.Collada = {
 			if( this._controllers_found[ id ] )
 				continue;
 
-			//console.log("Controller missing!: " + id );
+			//read it (we wont use the returns, we will get it from this._controllers_found
 			this.readController( xmlcontroller, null, scene );
 		}
 	},
 
 	//used for skinning and morphing
-	readController: function(xmlcontroller, flip, scene)
+	readController: function( xmlcontroller, flip, scene )
 	{
 		if(!xmlcontroller.localName == "controller")
 		{
@@ -1846,6 +1861,9 @@ global.Collada = {
 		}
 
 		var id = xmlcontroller.getAttribute("id");
+		//use cached
+		if( this._controllers_found[ id ] )
+			return this._controllers_found[ id ];
 
 		var use_indices = false;
 		var mesh = null;
@@ -1857,8 +1875,8 @@ global.Collada = {
 		if(xmlmorph)
 			mesh = this.readMorphController( xmlmorph, flip, scene, mesh );
 
+		//cache and return
 		this._controllers_found[ id ] = mesh;
-
 		return mesh;
 	},
 
