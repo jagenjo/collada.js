@@ -22,8 +22,14 @@ function showNodeInfo( node, root )
 		info = " Mesh: <span class='id2'>" + node.mesh + "</span>";
 	if(node.light)
 		info += " Light: " + node.light.type;
-	if(node.camera)
-		info += " Camera: FOV " + node.camera.fov.toFixed(2);
+	if(node.camera){
+		if (node.camera.fov)
+			info += " Camera: FOV " + node.camera.fov.toFixed(2);
+		else if (node.camera.yfov)
+			info += " Camera: YFOV " + node.camera.yfov.toFixed(2);
+		else if (node.camera.xfov)
+			info += " Camera: XFOV " + node.camera.xfov.toFixed(2);
+	}
 	if(node.materials)
 	{
 		info += " <br/>Materials: ";
@@ -72,7 +78,7 @@ function showSceneInfo(scene)
 	for(var i in scene.materials )
 	{
 		var mat = scene.materials[i];
-		log("<li><span class='id2'>" + i + "</span>: <span class='color'>" + (mat.diffuse ? "DIFFUSE: " + getColorString(mat.diffuse) : "NO COLOR") + "</span></li>");
+		log("<li><span class='id2'>" + i + "</span>: <span class='color'>" + (mat.diffuse ? "DIFFUSE: " + getColorString(mat.diffuse) : "NO COLOR") + "</span> : <span class='color'>" + (mat.textures.diffuse ? "DIFFUSE_TEX: " + mat.textures.diffuse.map_id : "NO DIFFUSE TEX") + "</span></li>");
 	}
 
 	log("<h2>Images</h2>");
@@ -92,8 +98,8 @@ function init()
 
 	elem.querySelector("button").addEventListener("click", function() {
 		onStartParsing();
-		Collada.loadInWorker("teapots.DAE", onParsed );
-		//Collada.load("teapots.DAE", onParsed ); //use this for worker
+		//Collada.loadInWorker("teapots.DAE", onParsed );
+		Collada.load("teapots.DAE", onParsed ); //use this for worker
 	});
 
 	//droping files 
