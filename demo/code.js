@@ -20,15 +20,17 @@ function showNodeInfo( node, root )
 	var info = "";
 	if(node.mesh)
 		info = " Mesh: <span class='id2'>" + node.mesh + "</span>";
-	if(node.light)
-		info += " Light: " + node.light.type;
+	if(node.light) {
+		info += " Light: " + node.light.type + 
+				". Position: [" + node.light.position[0].toFixed(2)+","+node.light.position[1].toFixed(2)+","+node.light.position[2].toFixed(2)+"]";
+		if (node.light.type == "directional" || node.light.type == "spot")
+			info += ". Target: [" + node.light.target[0].toFixed(2)+","+node.light.target[1].toFixed(2)+","+node.light.target[2].toFixed(2)+"]";
+		if (node.light.type == "spot")
+			info+= ". Angle: "+ node.light.angle + ". Angle_end: " + node.light.angle_end;
+	}
 	if(node.camera){
 		if (node.camera.fov)
 			info += " Camera: FOV " + node.camera.fov.toFixed(2);
-		else if (node.camera.yfov)
-			info += " Camera: YFOV " + node.camera.yfov.toFixed(2);
-		else if (node.camera.xfov)
-			info += " Camera: XFOV " + node.camera.xfov.toFixed(2);
 	}
 	if(node.materials)
 	{
@@ -98,8 +100,10 @@ function init()
 
 	elem.querySelector("button").addEventListener("click", function() {
 		onStartParsing();
-		//Collada.loadInWorker("teapots.DAE", onParsed );
-		Collada.load("teapots.DAE", onParsed ); //use this for worker
+		//Collada.loadInWorker("teapots.DAE", onParsed ); //use this for worker
+		//Collada.load("teapots.DAE", onParsed ); 
+		Collada.load("teapot_light_cam.dae", onParsed ); 
+
 	});
 
 	//droping files 
