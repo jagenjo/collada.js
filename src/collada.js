@@ -541,6 +541,7 @@ global.Collada = {
 
 				if(xmlcontroller)
 				{
+
 					var mesh_data = this.readController( xmlcontroller, flip, scene );
 
 					//binded materials
@@ -727,6 +728,8 @@ global.Collada = {
 		var xmlphong = xmltechnique.querySelector("phong");
 		if(!xmlphong) 
 			xmlphong = xmltechnique.querySelector("blinn");
+		if(!xmlphong) 
+			xmlphong = xmltechnique.querySelector("lambert");
 		if(!xmlphong) 
 			return null;
 
@@ -1975,17 +1978,27 @@ global.Collada = {
 
 		var id = xmlcontroller.getAttribute("id");
 
+		//AGUILA
+		//TODO: does this work?
+		// if (this._controllers_found[ id ])
+		// 	return this._controllers_found[ id ];
+
 		var use_indices = false;
 		var mesh = null;
 		var xmlskin = xmlcontroller.querySelector("skin");
-		if(xmlskin)
+		if(xmlskin) {
 			mesh = this.readSkinController( xmlskin, flip, scene);
+		}
 
 		var xmlmorph = xmlcontroller.querySelector("morph");
 		if(xmlmorph)
 			mesh = this.readMorphController( xmlmorph, flip, scene, mesh );
 
-		this._controllers_found[ id ] = mesh;
+		if (this._controllers_found[ id ]){
+			id += "_1blah";
+		}
+		else
+			this._controllers_found[ id ] = mesh;
 
 		return mesh;
 	},
@@ -1995,6 +2008,8 @@ global.Collada = {
 	{
 		//base geometry
 		var id_geometry = xmlskin.getAttribute("source");
+
+
 		var mesh = this.readGeometry( id_geometry, flip, scene );
 		if(!mesh)
 			return null;
@@ -2061,6 +2076,7 @@ global.Collada = {
 		var xmlvertexweights = xmlskin.querySelector("vertex_weights");
 		if(xmlvertexweights)
 		{
+
 			//here we see the order 
 			var weights_indexed_array = null;
 			var xmlinputs = xmlvertexweights.querySelectorAll("input");
@@ -2199,7 +2215,7 @@ global.Collada = {
 			mesh.bones = joints;
 			mesh.bind_matrix = bind_matrix;
 
-			delete mesh["_remap"];
+			//delete mesh["_remap"];
 		}
 
 		return mesh;
