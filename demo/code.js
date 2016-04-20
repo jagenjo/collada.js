@@ -80,7 +80,12 @@ function showSceneInfo(scene)
 	for(var i in scene.materials )
 	{
 		var mat = scene.materials[i];
-		log("<li><span class='id2'>" + i + "</span>: <span class='color'>" + (mat.diffuse ? "DIFFUSE: " + getColorString(mat.diffuse) : "NO COLOR") + "</span> : <span class='color'>" + (mat.textures.diffuse ? "DIFFUSE_TEX: " + mat.textures.diffuse.map_id : "NO DIFFUSE TEX") + "</span></li>");
+		var toLog = "<li><span class='id2'>" + i + "</span>: <span class='color'>" + (mat.diffuse ? "DIFFUSE: " + getColorString(mat.diffuse) : "NO COLOR") + "</span>";
+		if (mat.textures){
+			if (mat.textures.diffuse)
+				toLog+=" : <span class='color'>" + (mat.textures.diffuse ? "DIFFUSE_TEX: " + mat.textures.diffuse.map_id : "NO DIFFUSE TEX") + "</span></li>";
+		}
+		log(toLog);
 	}
 
 	log("<h2>Images</h2>");
