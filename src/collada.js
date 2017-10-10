@@ -1,5 +1,6 @@
-//collada.js 
-//This worker should offload the main thread from parsing big text files (DAE)
+// Collada.js  https://github.com/jagenjo/collada.js
+// Javi Agenjo 2015 
+// Specification from https://www.khronos.org/collada/wiki
 
 (function(global){
 
@@ -287,7 +288,7 @@ global.Collada = {
 
 		//Create a scene tree
 		var scene = { 
-			object_type:"SceneTree", 
+			object_class:"SceneTree", 
 			light: null,
 			materials: {},
 			meshes: {},
@@ -400,13 +401,20 @@ global.Collada = {
 	{
 		var node_id = this.safeString( xmlnode.getAttribute("id") );
 		var node_sid = this.safeString( xmlnode.getAttribute("sid") );
+		var node_name = this.safeString( xmlnode.getAttribute("name") );
 
-		if(!node_id && !node_sid)
+		var unique_name = node_id || node_sid || node_name;
+
+		if(!unique_name)
+		{
+			console.warn("Collada: node without name or id, skipping it");
 			return null;
+		}
 
 		//here we create the node
 		var node = { 
-			id: node_sid || node_id, 
+			name: node_name,
+			id: unique_name, 
 			children:[], 
 			_depth: level 
 		};
@@ -415,10 +423,7 @@ global.Collada = {
 		if(node_type)
 			node.type = node_type;
 
-		var node_name = xmlnode.getAttribute("name");
-		if( node_name)
-			node.name = node_name;
-		this._nodes_by_id[ node.id ] = node;
+		this._nodes_by_id[ unique_name ] = node;
 		if( node_id )
 			this._nodes_by_id[ node_id ] = node;
 		if( node_sid )
@@ -451,6 +456,9 @@ global.Collada = {
 	{
 		var node_id = this.safeString( xmlnode.getAttribute("id") );
 		var node_sid = this.safeString( xmlnode.getAttribute("sid") );
+		var node_name = this.safeString( xmlnode.getAttribute("name") );
+
+		var unique_name = node_id || node_sid || node_name;
 
 		/*
 		if(!node_id && !node_sid)
@@ -462,18 +470,21 @@ global.Collada = {
 		*/
 
 		var node;
-		if(!node_id && !node_sid) {
+		if(!unique_name) {
 			//if there is no id, then either all of this node's properties 
 			//should be assigned directly to its parent node, or the node doesn't
 			//have a parent node, in which case its a light or something. 
 			//So we get the parent by its id, and if there is no parent, we return null
 			if (parent)
-				node = this._nodes_by_id[ parent.id || parent.sid ];
+				node = this._nodes_by_id[ parent.id || parent.sid || parent.name ];
 			else 
+			{
+				console.warn("Collada: node without name or id, skipping it");
 				return null;
+			}
 		} 
 		else
-			node = this._nodes_by_id[ node_id || node_sid ];
+			node = this._nodes_by_id[ unique_name ];
 
 		if(!node)
 		{
@@ -501,7 +512,15 @@ global.Collada = {
 			{
 				var url = xmlchild.getAttribute("url");
 				var mesh_id = url.toString().substr(1);
-				node.mesh = mesh_id;
+
+				if(!node.mesh)
+					node.mesh = mesh_id;
+				else
+				{
+					if(!node.meshes)
+						node.meshes = [node.mesh];
+					node.meshes.push( mesh_id );
+				}
 
 				if(!scene.meshes[ url ])
 				{
@@ -810,7 +829,7 @@ global.Collada = {
 			}
 		}
 
-		material.object_type = "Material";
+		material.object_class = "Material";
 		return material;
 	},
 
@@ -1221,7 +1240,7 @@ global.Collada = {
 		var mesh = null;
 		var xmlpolygons = xmlmesh.querySelector("polygons");
 		if( xmlpolygons )
-			mesh = this.readTriangles( xmlpolygons, sources );
+			mesh = this.readPolygons( xmlpolygons, sources );
 
 		if(!mesh)
 		{
@@ -1236,11 +1255,10 @@ global.Collada = {
 			//var vcount = null;
 			//var xmlvcount = xmlpolygons.querySelector("vcount");
 			//var vcount = this.readContentAsUInt32( xmlvcount );
-			var xmlpolylist = xmlmesh.querySelector("polylist");
-			if(xmlpolylist)
-				mesh = this.readPolylist( xmlpolylist, sources );
+			var xmlpolylist_array = xmlmesh.querySelectorAll("polylist");
+			if( xmlpolylist_array && xmlpolylist_array.length )
+				mesh = this.readPolylistArray( xmlpolylist_array, sources );
 		}
-
 
 		if(!mesh)
 		{
@@ -1292,9 +1310,155 @@ global.Collada = {
 
 		//extra info
 		mesh.filename = id;
-		mesh.object_type = "Mesh";
+		mesh.object_class = "Mesh";
 
 		this._geometries_found[ id ] = mesh;
+		return mesh;
+	},
+
+	readPolygons: function( xmlpolygons, sources )
+	{
+		var use_indices = false;
+
+		var groups = [];
+		var last_index = 0;
+		var facemap = {};
+		var vertex_remap = []; //maps DAE vertex index to Mesh vertex index (because when meshes are triangulated indices are changed
+		var indicesArray = [];
+		var last_start = 0;
+		var group_name = "";
+		var material_name = xmlpolygons.getAttribute("material");
+		var buffers = [];
+
+		var xmlp_array = [];
+		var split_to_triangles = true;
+
+		//for every triangles set (warning, some times they are repeated...)
+		for(var i = 0; i < xmlpolygons.childNodes.length; i++)
+		{
+			var xml_elem = xmlpolygons.childNodes.item(i);
+
+			if(xml_elem.localName == "input")
+			{
+				var buffer = this.readInput( xml_elem, sources );
+				if(buffer)
+					buffers.push( buffer );
+			}
+			else if( xml_elem.localName == "p")
+			{
+				xmlp_array.push( xml_elem );
+			}
+			else if(xml_elem.localName)
+				console.warn("unknown xml tag in <polygons>: " + xml_elem.localName);
+		}
+
+		//assuming buffers are ordered by offset
+		//iterate data
+		var num_data_vertex = buffers.length; //one value per input buffer
+
+		//compute data to read per vertex
+		var num_values_per_vertex = 1;
+		var buffers_length = buffers.length;
+		for(var b = 0; b < buffers_length; ++b)
+			num_values_per_vertex = Math.max( num_values_per_vertex, buffers[b][4] + 1);
+
+		//for every polygon (could be one with all the indices, could be several, depends on the program)
+		for(var i = 0; i < xmlp_array.length; i++)
+		{
+			var xmlp = xmlp_array[i];
+			if(!xmlp || !xmlp.textContent) 
+				break;
+
+			var data = xmlp.textContent.trim().split(" ");
+
+			//used for triangulate polys
+			var first_index = -1;
+			var current_index = -1;
+			var prev_index = -1;
+
+			//discomment to force 16bits indices
+			//if(use_indices && last_index >= 256*256)
+			//	break;
+
+			//for every pack of indices in the polygon (vertex, normal, uv, ... )
+			for(var k = 0, l = data.length; k < l; k += num_values_per_vertex)
+			{
+				var vertex_id = data.slice(k,k+num_values_per_vertex).join(" "); //generate unique id
+
+				prev_index = current_index;
+				if(facemap.hasOwnProperty(vertex_id)) //add to arrays, keep the index
+					current_index = facemap[vertex_id];
+				else
+				{
+					//for every data buffer associated to this vertex
+					for(var j = 0; j < buffers_length; ++j)
+					{
+						var buffer = buffers[j];
+						var array = buffer[1]; //array where we accumulate the final data as we extract if from sources
+						var source = buffer[3]; //where to read the data from
+						
+						//compute the index inside the data source array
+						var index = parseInt( data[ k + buffer[4] ] );
+
+						//remember this index in case we need to remap
+						if(j == 0)
+							vertex_remap[ array.length / buffer[2] ] = index; //not sure if buffer[2], it should be number of floats per vertex (usually 3)
+
+						//compute the position inside the source buffer where the final data is located
+						index *= buffer[2]; //this works in most DAEs (not all)
+
+						//extract every value of this element and store it in its final array (every x,y,z, etc)
+						for(var x = 0; x < buffer[2]; ++x)
+						{
+							//if(source[index+x] === undefined) throw("UNDEFINED!"); //DEBUG
+							array.push( source[index+x] );
+						}
+					}
+					
+					current_index = last_index;
+					last_index += 1;
+					facemap[vertex_id] = current_index;
+				}
+
+				if(split_to_triangles) //the xml element is not triangles? then split polygons in triangles
+				{
+					if(k == 0)
+						first_index = current_index;
+					//if(k > 2 * num_data_vertex) //not sure if use this or the next line, the next one works in some DAEs but not sure if it works in all
+					if( (k/num_values_per_vertex) > 2) //triangulate polygons: k is the float, but is divided by num_values_per_vertex because every vertex could have several indices (for normals, etc)
+					{
+						indicesArray.push( first_index );
+						indicesArray.push( prev_index );
+					}
+				}
+
+				indicesArray.push( current_index );
+			}//per vertex
+		}//per polygon
+
+		var group = {
+			name: group_name || ("group"),
+			start: last_start,
+			length: indicesArray.length - last_start,
+			material: material_name || ""
+		};
+		last_start = indicesArray.length;
+		groups.push( group );
+
+		if(!buffers.length)
+		{
+			console.warn("collada: <polygon> without buffers");
+			return null;
+		}
+
+		var mesh = {
+			vertices: new Float32Array( buffers[0][1] ),
+			info: { groups: groups },
+			_remap: new Uint32Array(vertex_remap)
+		};
+
+		this.transformMeshInfo( mesh, buffers, indicesArray );
+
 		return mesh;
 	},
 
@@ -1330,6 +1494,12 @@ global.Collada = {
 			var xmlps = xml_shape_root.querySelectorAll("p");
 			var num_data_vertex = buffers.length; //one value per input buffer
 
+			//compute data to read per vertex
+			var num_values_per_vertex = 1;
+			var buffers_length = buffers.length;
+			for(var b = 0; b < buffers_length; ++b)
+				num_values_per_vertex = Math.max( num_values_per_vertex, buffers[b][4] + 1);
+
 			//for every polygon (could be one with all the indices, could be several, depends on the program)
 			for(var i = 0; i < xmlps.length; i++)
 			{
@@ -1348,12 +1518,7 @@ global.Collada = {
 				//if(use_indices && last_index >= 256*256)
 				//	break;
 
-				var num_values_per_vertex = 1;
-				for(var b in buffers)
-					num_values_per_vertex = Math.max( num_values_per_vertex, buffers[b][4] + 1);
-
 				//for every pack of indices in the polygon (vertex, normal, uv, ... )
-				var current_data_pos = 0;
 				for(var k = 0, l = data.length; k < l; k += num_values_per_vertex)
 				{
 					var vertex_id = data.slice(k,k+num_values_per_vertex).join(" "); //generate unique id
@@ -1364,30 +1529,26 @@ global.Collada = {
 					else
 					{
 						//for every data buffer associated to this vertex
-						for(var j = 0; j < buffers.length; ++j)
+						for(var j = 0; j < buffers_length; ++j)
 						{
 							var buffer = buffers[j];
 							var array = buffer[1]; //array where we accumulate the final data as we extract if from sources
 							var source = buffer[3]; //where to read the data from
 							
 							//compute the index inside the data source array
-							//var index = parseInt(data[k + j]);
 							var index = parseInt( data[ k + buffer[4] ] );
-							//current_data_pos += buffer[4];
 
 							//remember this index in case we need to remap
 							if(j == 0)
 								vertex_remap[ array.length / buffer[2] ] = index; //not sure if buffer[2], it should be number of floats per vertex (usually 3)
-								//vertex_remap[ array.length / num_data_vertex ] = index;
 
 							//compute the position inside the source buffer where the final data is located
 							index *= buffer[2]; //this works in most DAEs (not all)
-							//index = index * buffer[2] + buffer[4]; //stride(2) offset(4)
-							//index += buffer[4]; //stride(2) offset(4)
+
 							//extract every value of this element and store it in its final array (every x,y,z, etc)
 							for(var x = 0; x < buffer[2]; ++x)
 							{
-								if(source[index+x] === undefined) throw("UNDEFINED!"); //DEBUG
+								//if(source[index+x] === undefined) throw("UNDEFINED!"); //DEBUG
 								array.push( source[index+x] );
 							}
 						}
@@ -1423,6 +1584,9 @@ global.Collada = {
 			groups.push( group );
 		}//per triangles group
 
+		if(!buffers.length)
+			return null;
+
 		var mesh = {
 			vertices: new Float32Array( buffers[0][1] ),
 			info: { groups: groups },
@@ -1434,7 +1598,28 @@ global.Collada = {
 		return mesh;
 	},
 
-	readPolylist: function( xml_shape_root, sources )
+	readPolylistArray: function( xml_polylist_array, sources )
+	{
+		var meshes = [];
+
+		for(var i = 0; i < xml_polylist_array.length; ++i)
+		{
+			var xml_polylist = xml_polylist_array[i];
+			var mesh = this.readPolylist( xml_polylist, sources );
+			if(mesh)
+				meshes.push( mesh );
+		}
+
+		//one or none
+		if( meshes.length < 2)
+			return meshes[0];
+
+		//merge meshes
+		var mesh = this.mergeMeshes( meshes );
+		return mesh;
+	},
+
+	readPolylist: function( xml_polylist, sources )
 	{
 		var use_indices = false;
 
@@ -1448,18 +1633,21 @@ global.Collada = {
 		var group_name = "";
 		var material_name = "";
 
-		material_name = xml_shape_root.getAttribute("material");
-		buffers = this.readShapeInputs( xml_shape_root, sources );
+		material_name = xml_polylist.getAttribute("material") || "";
+		buffers = this.readShapeInputs( xml_polylist, sources );
 
-		var xmlvcount = xml_shape_root.querySelector("vcount");
+		var xmlvcount = xml_polylist.querySelector("vcount");
 		var vcount = this.readContentAsUInt32( xmlvcount );
 
-		var xmlp = xml_shape_root.querySelector("p");
+		var xmlp = xml_polylist.querySelector("p");
 		var data = this.readContentAsUInt32( xmlp );
-
-		var num_data_vertex = buffers.length;
-
 		var pos = 0;
+
+		var num_values_per_vertex = 1;
+		var buffers_length = buffers.length;
+		for(var b = 0; b < buffers_length; ++b)
+			num_values_per_vertex = Math.max( num_values_per_vertex, buffers[b][4] + 1);
+
 		for(var i = 0, l = vcount.length; i < l; ++i)
 		{
 			var num_vertices = vcount[i];
@@ -1469,26 +1657,35 @@ global.Collada = {
 			var prev_index = -1;
 
 			//iterate vertices of this polygon
-			for(var k = 0; k < num_vertices; ++k )
+			for(var k = 0; k < num_vertices; ++k)
 			{
-				var vertex_id = data.subarray(pos,pos + num_data_vertex).join(" ");
+				var vertex_id = data.slice( pos, pos + num_values_per_vertex).join(" "); //generate unique id
 
 				prev_index = current_index;
 				if(facemap.hasOwnProperty(vertex_id)) //add to arrays, keep the index
 					current_index = facemap[vertex_id];
 				else
 				{
-					for(var j = 0; j < buffers.length; ++j)
+					for(var j = 0; j < buffers_length; ++j)
 					{
 						var buffer = buffers[j];
-						var index = parseInt( data[pos + j] ); //p
 						var array = buffer[1]; //array with all the data
 						var source = buffer[3]; //where to read the data from
+
+						var index = parseInt( data[ pos + buffer[4] ] );
+
 						if(j == 0)
-							vertex_remap[ array.length / num_data_vertex ] = index;
-						index *= buffer[2]; //stride
+							vertex_remap[ array.length / buffer[2] ] = index; //not sure if buffer[2], it should be number of floats per vertex (usually 3)
+
+						//compute the position inside the source buffer where the final data is located
+						index *= buffer[2]; //this works in most DAEs (not all)
+
+						//extract every value of this element and store it in its final array (every x,y,z, etc)
 						for(var x = 0; x < buffer[2]; ++x)
+						{
+							//if(source[index+x] === undefined) throw("UNDEFINED!"); //DEBUG
 							array.push( source[index+x] );
+						}
 					}
 					
 					current_index = last_index;
@@ -1509,19 +1706,19 @@ global.Collada = {
 				}
 
 				indicesArray.push( current_index );
-				pos += num_data_vertex;
+				pos += num_values_per_vertex;
 			}//per vertex
-
 		}//per polygon
 
 		var mesh = {
 			vertices: new Float32Array( buffers[0][1] ),
-			info: {},
+			info: {
+				material: material_name
+			},
 			_remap: new Uint32Array( vertex_remap )
 		};
 
 		this.transformMeshInfo( mesh, buffers, indicesArray );
-
 		return mesh;
 	},
 
@@ -1532,21 +1729,33 @@ global.Collada = {
 		var xmlinputs = xml_shape_root.querySelectorAll("input");
 		for(var i = 0; i < xmlinputs.length; i++)
 		{
-			var xmlinput = xmlinputs.item(i);
-			if(!xmlinput.getAttribute) 
+			var xml_input = xmlinputs.item(i);
+			if(!xml_input.getAttribute) 
 				continue;
-			var semantic = xmlinput.getAttribute("semantic").toUpperCase();
-			var stream_source = sources[ xmlinput.getAttribute("source").substr(1) ];
-			var offset = parseInt( xmlinput.getAttribute("offset") );
-			var data_set = 0;
-			if(xmlinput.getAttribute("set"))
-				data_set = parseInt( xmlinput.getAttribute("set") );
-			buffers.push([semantic, [], stream_source.stride, stream_source.data, offset, data_set ]);
+			var buffer = this.readInput( xml_input, sources );
+			if(buffer)
+				buffers.push(buffer);
+			else
+				console.warn("no buffer in collada");
 		}
 
 		return buffers;
 	},
 
+	readInput: function( xml_input, sources )
+	{
+		if(!xml_input.getAttribute) 
+			return null;
+		var semantic = xml_input.getAttribute("semantic").toUpperCase();
+		var stream_source = sources[ xml_input.getAttribute("source").substr(1) ];
+		var offset = parseInt( xml_input.getAttribute("offset") );
+		var data_set = 0;
+		if(xml_input.getAttribute("set"))
+			data_set = parseInt( xml_input.getAttribute("set") );
+		return [semantic, [], stream_source.stride, stream_source.data, offset, data_set ];
+	},
+
+	//renames buffers to they match an standard imposed by the library
 	transformMeshInfo: function( mesh, buffers, indicesArray )
 	{
 		//rename buffers (DAE has other names)
@@ -1554,6 +1763,7 @@ global.Collada = {
 			"normal":"normals",
 			"texcoord":"coords"
 		};
+
 		for(var i = 1; i < buffers.length; ++i)
 		{
 			var name = buffers[i][0].toLowerCase();
@@ -1746,7 +1956,7 @@ global.Collada = {
 		var xmlanimation_childs = xmlanimations.childNodes;
 
 		var animations = {
-			object_type: "Animation",
+			object_class: "Animation",
 			takes: {}
 		};
 
@@ -1997,14 +2207,10 @@ global.Collada = {
 		}
 
 		var id = xmlcontroller.getAttribute("id");
+
 		//use cached
 		if( this._controllers_found[ id ] )
 			return this._controllers_found[ id ];
-
-		//AGUILA
-		//TODO: does this work?
-		// if (this._controllers_found[ id ])
-		// 	return this._controllers_found[ id ];
 
 		var use_indices = false;
 		var mesh = null;
@@ -2018,11 +2224,7 @@ global.Collada = {
 			mesh = this.readMorphController( xmlmorph, flip, scene, mesh );
 
 		//cache and return
-		if (this._controllers_found[ id ]){
-			id += "_1blah"; //??? this doesnt do anything
-		}
-		else
-			this._controllers_found[ id ] = mesh;
+		this._controllers_found[ id ] = mesh;
 
 		return mesh;
 	},
@@ -2080,7 +2282,7 @@ global.Collada = {
 				return null;
 			}
 
-			for(var i in joints_source)
+			for(var i = 0; i < joints_source.length; ++i)
 			{
 				//get the inverse of the bind pose
 				var inv_mat = inv_bind_source.subarray(i*16,i*16+16);
@@ -2125,6 +2327,8 @@ global.Collada = {
 
 			var pos = 0;
 			var remap = mesh._remap;
+			if(!remap)
+				throw("no remap info found in mesh");
 			var max_bone = 0; //max bone affected
 
 			for(var i = 0, l = vcount.length; i < l; ++i)
@@ -2474,6 +2678,166 @@ global.Collada = {
 
 		}
 		return matrix;
+	},
+
+	mergeMeshes: function( meshes, options )
+	{
+		options = options || {};
+
+		var vertex_buffers = {};
+		var index_buffers = {};
+		var offsets = {}; //tells how many positions indices must be offseted
+		var vertex_offsets = [];
+		var current_vertex_offset = 0;
+		var groups = [];
+
+		var index_buffer_names = {
+			triangles: true,
+			wireframe: true
+		};
+
+		var remap = null;
+		var remap_offset = 0;
+
+		//vertex buffers
+		//compute size
+		for(var i = 0; i < meshes.length; ++i)
+		{
+			var mesh = meshes[i];
+			var offset = current_vertex_offset;
+			vertex_offsets.push( offset );
+			var length = mesh.vertices.length / 3;
+			current_vertex_offset += length;
+
+			for(var j in mesh)
+			{
+				var buffer = mesh[j];
+
+				if( j == "info" || j == "_remap" )
+					continue;
+
+				if( index_buffer_names[j] )
+				{
+					if(!index_buffers[j])
+						index_buffers[j] = buffer.length;
+					else
+						index_buffers[j] += buffer.length;
+				}
+				else
+				{
+					if(!vertex_buffers[j])
+						vertex_buffers[j] = buffer.length;
+					else
+						vertex_buffers[j] += buffer.length;
+				}
+			}
+
+			//groups
+			var group = {
+				name: "mesh_" + ( mesh.info.material || i ),
+				start: offset,
+				length: length,
+				material: ( mesh.info.material || "" )
+			};
+
+			groups.push( group );
+		}
+
+		//allocate
+		for(var j in vertex_buffers)
+		{
+			var datatype = options[j];
+			if(datatype === null)
+			{
+				delete vertex_buffers[j];
+				continue;
+			}
+
+			if(!datatype)
+				datatype = Float32Array;
+
+			vertex_buffers[j] = new datatype( vertex_buffers[j] );
+			offsets[j] = 0;
+		}
+
+		for(var j in index_buffers)
+		{
+			index_buffers[j] = new Uint32Array( index_buffers[j] );
+			offsets[j] = 0;
+		}
+
+		//store
+		for(var i = 0; i < meshes.length; ++i)
+		{
+			var mesh = meshes[i];
+			var offset = 0;
+
+			var buffer = mesh.vertices;
+			if(!buffer)
+				return console.error("mesh without vertices");
+			var length = buffer.length / 3;
+			
+			for(var j in mesh)
+			{
+				var buffer = mesh[j];
+				if( j == "info")
+					continue;
+
+				if(j == "_remap")
+				{
+					if(remap_offset)
+						apply_offset( buffer, 0, buffer.length, remap_offset );
+
+					if(!remap)
+					{
+						remap = new Uint32Array( buffer.length );
+						remap.set( buffer );
+					}
+					else
+					{
+						var new_remap = new Uint32Array( remap.length + buffer.length );
+						new_remap.set( remap );
+						new_remap.set( buffer, remap.length );
+						remap = new_remap;
+					}
+					remap_offset += length;
+				}
+
+				//INDEX BUFFER
+				if( index_buffer_names[j] )
+				{
+					index_buffers[j].set( buffer, offsets[j] );
+					apply_offset( index_buffers[j], offsets[j], buffer.length, vertex_offsets[i] );
+					offsets[j] += buffer.length;
+					continue;
+				}
+
+				//VERTEX BUFFER
+				if(!vertex_buffers[j])
+					continue;
+
+				vertex_buffers[j].set( buffer, offsets[j] );
+				offsets[j] += buffer.length;
+			}
+		}
+
+		function apply_offset( array, start, length, offset )
+		{
+			var l = start + length;
+			for(var i = start; i < l; ++i)
+				array[i] += offset;
+		}
+
+		var extra = { info: { groups: groups } };
+		var final_mesh = { info: { groups: groups } };
+		for(var i in vertex_buffers)
+			final_mesh[i] = vertex_buffers[i];
+		for(var i in index_buffers)
+			final_mesh[i] = index_buffers[i];
+
+		if( remap )
+			final_mesh._remap = remap;
+		return final_mesh;
 	}
 };
 
