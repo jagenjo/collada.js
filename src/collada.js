@@ -88,6 +88,7 @@ global.Collada = {
 
 	_xmlroot: null,
 	_nodes_by_id: null,
+	_nodes_by_sid: null,
 	_transferables: null,
 	_controllers_found: null,
 	_geometries_found: null,
@@ -283,6 +284,7 @@ global.Collada = {
 
 		//hack to avoid problems with bones with spaces in names
 		this._nodes_by_id = {}; //clear
+		this._nodes_by_sid = {}; //clear
 		this._controllers_found = {};//we need to check what controllers had been found, in case we miss one at the end
 		this._geometries_found = {};
 
@@ -339,6 +341,7 @@ global.Collada = {
 
 		//clear memory
 		this._nodes_by_id = {};
+		this._nodes_by_sid = {};
 		this._controllers_found = {};
 		this._geometries_found = {};
 		this._xmlroot = null;
@@ -415,6 +418,7 @@ global.Collada = {
 		var node = { 
 			name: node_name,
 			id: unique_name, 
+			sid: node_sid, //just in case
 			children:[], 
 			_depth: level 
 		};
@@ -427,7 +431,10 @@ global.Collada = {
 		if( node_id )
 			this._nodes_by_id[ node_id ] = node;
 		if( node_sid )
+		{
+			this._nodes_by_sid[ node_sid ] = node;
 			this._nodes_by_id[ node_sid ] = node;
+		}
 
 		//transform
 		node.model = this.readTransform(xmlnode, level, flip );
@@ -452,6 +459,8 @@ global.Collada = {
 		return node;
 	},
 
+	//extracts the info of a node
+	//this is done AFTER having created the scene tree to avoid problems of nodes referencing other nodes that are not yet created
 	readNodeInfo: function( xmlnode, scene, level, flip, parent )
 	{
 		var node_id = this.safeString( xmlnode.getAttribute("id") );
@@ -459,16 +468,6 @@ global.Collada = {
 		var node_name = this.safeString( xmlnode.getAttribute("name") );
 
 		var unique_name = node_id || node_sid || node_name;
-
-		/*
-		if(!node_id && !node_sid)
-		{
-			console.warn("Collada: node without id, creating a random one");
-			node_id = this.generateName("node_");
-			return null;
-		}
-		*/
-
 		var node;
 		if(!unique_name) {
 			//if there is no id, then either all of this node's properties 
@@ -483,8 +482,11 @@ global.Collada = {
 				return null;
 			}
 		} 
-		else
+		else //retrieve node
 			node = this._nodes_by_id[ unique_name ];
+
+		if(!node)
+			node = this._nodes_by_sid[ node_sid ];
 
 		if(!node)
 		{
@@ -2298,6 +2300,9 @@ global.Collada = {
 			}
 		}
 
+		var too_many_bones = 0;
+		var all_bones = [];
+
 		//weights
 		var xmlvertexweights = xmlskin.querySelector("vertex_weights");
 		if(xmlvertexweights)
@@ -2331,29 +2336,38 @@ global.Collada = {
 				throw("no remap info found in mesh");
 			var max_bone = 0; //max bone affected
 
+			//for every bone affecting this vertex
 			for(var i = 0, l = vcount.length; i < l; ++i)
 			{
 				var num_bones = vcount[i]; //num bones influencing this vertex
-
-				//find 4 with more influence
-				//var v_tuplets = v.subarray(offset, offset + num_bones*2);
-
 				var offset = pos;
+
+				//get 4 most important bones
+				all_bones.length = num_bones;
+				for(var j = 0; j < num_bones; ++j)
+					all_bones[j] = [ weights_indexed_array[ v[offset + j*2 + 1] ], v[offset + j*2] ]; //[weight,bone_index]
+				all_bones.sort( this._bones_sort_func );
+				if( all_bones.length > 4 )
+				{
+					all_bones.length = 4; //remove extra bones
+					too_many_bones += 1;
+				}
+
 				var b = bone_index_array.subarray(i*4, i*4 + 4);
 				var w = weights_array.subarray(i*4, i*4 + 4);
 
-				var sum = 0;
-				for(var j = 0; j < num_bones && j < 4; ++j)
+				var sum = 0; //check total weight of selected bones (after skipping some because of the 4 bones limit)
+				for(var j = 0; j < all_bones.length; ++j)
 				{
-					b[j] = v[offset + j*2];
-					if(b[j] > max_bone) max_bone = b[j];
-
-					w[j] = weights_indexed_array[ v[offset + j*2 + 1] ];
+					b[j] = all_bones[j][1];
+					if(b[j] > max_bone)
+						max_bone = b[j];
+					w[j] = all_bones[j][0];
 					sum += w[j];
 				}
 
-				//normalize weights
-				if(num_bones > 4 && sum < 1.0)
+				//normalize weights after removing some
+				if(sum < 1.0)
 				{
 					var inv_sum = 1/sum;
 					for(var j = 0; j < 4; ++j)
@@ -2362,6 +2376,9 @@ global.Collada = {
 
 				pos += num_bones * 2;
 			}
+
+			if(too_many_bones)
+				console.warn("This mesh has "+too_many_bones+" vertices with more than 4 bones, skipping extra bones. This could cause errors in the skinning.");
 
 
 			//remap: because vertices order is now changed after parsing the mesh
@@ -2436,6 +2453,17 @@ global.Collada = {
 				//console.log("Bones: ", joints.length, " used:", num_used_joints );
 			}
 
+			//check bone names are correct
+			for(var i = 0; i < joints.length; ++i)
+			{
+				var joint = joints[i];
+				var bone_node = this._nodes_by_id[ joint[0] ] || this._nodes_by_sid[ joint[0] ];
+				if(bone_node)
+					joint[0] = bone_node.id || bone_node.name;
+				else
+					console.warn("Bone not found");
+			}
+
 			//console.log("Bones: ", joints.length, "Max bone: ", max_bone);
 
 			mesh.weights = final_weights;
@@ -2447,6 +2475,11 @@ global.Collada = {
 		}
 
 		return mesh;
+	},
+
+	_bones_sort_func: function(a,b)
+	{
+		return b[0] - a[0];
 	},
 
 	//NOT TESTED
