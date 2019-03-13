@@ -20,6 +20,7 @@ It can work in the main thread or inside a worker, but **it doesnt work in nodej
 It comes with its own function **Collada.loadInWorker** that does the HttpRequest and the parsing inside the worker to avoid blocking the main thread, and uses transferables when possible.
 
 When using a worker you need to have installed the [XML for script](http://xmljs.sourceforge.net/) (supplied in the folder external/). Check the demo to see how to pass the relative folder to all the libraries to the worker.
+
 It can be imported as a module.
 
 Demo & Benchmark
