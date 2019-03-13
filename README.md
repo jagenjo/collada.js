@@ -15,9 +15,10 @@ Returns an object with all the info ready to use. The data arrays are in typed-a
 
 Due to the opennes of DAE every 3D authoring tool tends to exports data in a different way, thats why not all DAEs will work, but it has been tested with DAEs from Cinema4D, 3D Studio Max, Maya and Blender, although animation is still a problem with Cinema4D.
 
-It can work in the main thread or inside a worker.
+It can work in the main thread or inside a worker, but *it doesnt work in nodejs* (it relies in the XML capabilities of the browser).
 It comes with its own function **Collada.loadInWorker** that does the HttpRequest and the parsing inside the worker to avoid blocking the main thread, and uses transferables when possible.
 When using a worker you need to have installed the [XML for script](http://xmljs.sourceforge.net/) (supplied in the folder external/). Check the demo to see how to pass the relative folder to all the libraries to the worker.
+It can be imported as a module.
 
 Demo & Benchmark
 -----------------
