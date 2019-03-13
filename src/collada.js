@@ -1,10 +1,11 @@
 // Collada.js  https://github.com/jagenjo/collada.js
 // Javi Agenjo 2015 
 // Specification from https://www.khronos.org/collada/wiki
+var _collada;
 
 (function(global){
 
-var isWorker = global.document === undefined;
+var isWorker = typeof(window) == "undefined" && typeof(exports) == "undefined";
 var DEG2RAD = Math.PI * 2 / 360;
 
 //global temporal variables
@@ -35,7 +36,7 @@ if( isWorker )
 }
 
 //Collada parser
-global.Collada = {
+global.Collada = _collada = {
 
 	libsPath: "./",
 	workerPath: "./",
@@ -290,7 +291,7 @@ global.Collada = {
 
 		//Create a scene tree
 		var scene = { 
-			object_class:"SceneTree", 
+			object_class:"Scene", 
 			light: null,
 			materials: {},
 			meshes: {},
@@ -334,12 +335,12 @@ global.Collada = {
 		this.readLibraryControllers( scene );
 
 		//read animations
-		var animations = this.readAnimations(root, scene);
+		var animations = this.readAnimations( root, scene );
 		if(animations)
 		{
-			var animations_name = "#animations_" + filename.substr(0,filename.indexOf("."));
+			var animations_name = "animations_" + filename.substr(0,filename.indexOf("."));
 			scene.resources[ animations_name ] = animations;
-			scene.root.animations = animations_name;
+			scene.root.animation = animations_name;
 		}
 
 		//read external files (images)
@@ -793,6 +794,11 @@ global.Collada = {
 				parent = init_from.innerHTML;
 			else {
 				var source = xmlnewparams[i].querySelector("source");
+				if(!parent)
+				{
+					console.warn("no source found for material for newparam");
+					continue;
+				}
 				parent = source.innerHTML;
 			}
 
@@ -817,6 +823,8 @@ global.Collada = {
 		if(!xmlphong) 
 			return null;
 
+		material.type = xmlphong.localName;
+
 		//for every tag of properties
 		for(var i = 0; i < xmlphong.childNodes.length; ++i)
 		{
@@ -838,7 +846,10 @@ global.Collada = {
 			if(xmlparam_value.localName.toString() == "color")
 			{
 				var value = this.readContentAsFloats( xmlparam_value );
-				if( xmlparam.getAttribute("opaque") == "RGB_ZERO")
+				var opaque_value = xmlparam.getAttribute("opaque");
+				if(opaque_value)
+					material.opaque_info = opaque_value;
+				if( opaque_value == "RGB_ZERO")
 					material[ param_name ] = value.subarray(0,4);
 				else
 					material[ param_name ] = value.subarray(0,3);
@@ -2938,6 +2949,7 @@ global.Collada = {
 	}
 };
 
+var Collada = global.Collada;
 
 //add worker launcher
 if(!isWorker)
@@ -3077,4 +3089,6 @@ if(isWorker)
 	}, false);
 }
 
-})( typeof(window) != "undefined" ? window : self );
+//})( typeof(window) != "undefined" ? window : self );
+})( typeof(window) != "undefined" ? window : ( typeof(exports) != "undefined" ? exports : self ) );
+
